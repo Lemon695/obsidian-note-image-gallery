@@ -1,8 +1,279 @@
-/*
+.modal:has(.current-note-image-gallery) {
+	width: 90vw !important;
+	height: 90vh !important;
+	max-width: 90vw !important;
+	max-height: 90vh !important;
+}
 
-This CSS file will be included with your plugin, and
-available in the app when your plugin is enabled.
+.modal-content.current-note-image-gallery {
+	width: 100% !important;
+	height: 100% !important;
+	display: flex !important;
+	flex-direction: column !important;
+	padding: 0 !important;
+}
 
-If your plugin does not need CSS, delete this file.
+.current-note-image-gallery .image-wall.waterfall {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)) !important;
+	grid-auto-rows: 10px;
+	gap: 16px;
+	padding: 16px;
+}
 
-*/
+.current-note-image-gallery .image-wall-container {
+	flex: 1;
+	overflow-y: auto;
+	width: 100%;
+	padding: 0;
+}
+
+.current-note-image-gallery {
+	width: 90vw !important;
+	height: 90vh !important;
+	max-width: 90vw !important;
+	max-height: 90vh !important;
+	border-radius: 12px;
+	overflow: hidden;
+	display: flex !important;
+	flex-direction: column !important;
+	padding: 0 !important;
+}
+
+.modal-toolbar {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	padding: 10px 20px;
+	background: var(--background-secondary);
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.modal-title {
+	font-size: 16px;
+	font-weight: 500;
+}
+
+.modal-close-button {
+	cursor: pointer;
+	font-size: 24px;
+	line-height: 1;
+	padding: 4px 8px;
+	border-radius: 4px;
+}
+
+.modal-close-button:hover {
+	background: var(--background-modifier-hover);
+}
+
+.image-wall-container {
+	flex: 1;
+	overflow-y: auto;
+	width: 100%;
+	padding: 0;
+}
+
+/* 优化瀑布流列数 */
+.image-wall.waterfall {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)) !important;
+	grid-auto-rows: 10px;
+	gap: 16px;
+	padding: 16px;
+}
+
+/* 图片项样式 */
+.image-item {
+	position: relative;
+	width: 100%;
+	cursor: pointer;
+	transition: all 0.3s ease;
+	background: var(--background-secondary);
+	border-radius: 8px;
+	overflow: hidden;
+}
+
+.image-item:hover {
+	transform: translateY(-4px);
+	box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+	z-index: 1;
+}
+
+.image-item img {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+	border-radius: 8px;
+	display: block;
+	opacity: 0;
+	transition: opacity 0.3s ease;
+}
+
+/* 大图查看遮罩 */
+.lightbox-overlay {
+	position: fixed;
+	top: 0;
+	left: 0;
+	width: 100%;
+	height: 100%;
+	background: rgba(0, 0, 0, 0.85);
+	display: flex;
+	justify-content: center;
+	align-items: center;
+	z-index: 1000;
+}
+
+.lightbox-overlay img {
+	max-width: 90%;
+	max-height: 90vh;
+	object-fit: contain;
+}
+
+.lightbox-close {
+	position: fixed;
+	top: 20px;
+	right: 20px;
+	color: white;
+	font-size: 32px;
+	cursor: pointer;
+	width: 40px;
+	height: 40px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: rgba(0, 0, 0, 0.5);
+	border-radius: 50%;
+	z-index: 1001;
+}
+
+/* 加载状态 */
+.loading-text {
+	position: absolute;
+	top: 50%;
+	left: 50%;
+	transform: translate(-50%, -50%);
+	color: var(--text-muted);
+	background: var(--background-secondary);
+	padding: 8px 16px;
+	border-radius: 4px;
+}
+
+/* 错误状态 */
+.image-item.error {
+	padding: 20px;
+	text-align: center;
+	color: var(--text-error);
+	background: var(--background-modifier-error);
+	min-height: 100px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+/* 响应式布局 */
+@media (max-width: 768px) {
+	.image-wall.waterfall {
+		grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+		gap: 8px;
+	}
+
+	.current-note-image-gallery {
+		width: 95vw !important;
+		height: 95vh !important;
+	}
+}
+
+/* 动画效果 */
+@keyframes fadeIn {
+	from {
+		opacity: 0;
+		transform: translateY(10px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
+.image-item {
+	animation: fadeIn 0.3s ease-out forwards;
+}
+
+.image-context-menu {
+	background: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 4px;
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+	z-index: 1000;
+	padding: 4px 0;
+}
+
+.image-context-menu .menu-item {
+	padding: 6px 12px;
+	cursor: pointer;
+	color: var(--text-normal);
+}
+
+.image-context-menu .menu-item:hover {
+	background-color: var(--background-modifier-hover);
+}
+
+/* 图片容器样式 */
+.lightbox-image-container {
+	position: relative;
+	max-width: 90%;
+	max-height: 90vh;
+	display: flex;
+	justify-content: center;
+	align-items: center;
+}
+
+.lightbox-image-container img {
+	max-width: 100%;
+	max-height: 90vh;
+	object-fit: contain;
+}
+
+/* 导航按钮样式 */
+.lightbox-nav {
+	position: fixed;
+	top: 50%;
+	transform: translateY(-50%);
+	background: rgba(0, 0, 0, 0.5);
+	color: white;
+	padding: 16px 12px;
+	cursor: pointer;
+	font-size: 24px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	transition: all 0.3s ease;
+	border-radius: 4px;
+	z-index: 1001;
+}
+
+.lightbox-nav:hover {
+	background: rgba(0, 0, 0, 0.8);
+}
+
+.lightbox-nav.prev {
+	left: 20px;
+}
+
+.lightbox-nav.next {
+	right: 20px;
+}
+
+/* 图片计数器样式 */
+.lightbox-counter {
+	position: fixed;
+	bottom: 20px;
+	left: 50%;
+	transform: translateX(-50%);
+	background: rgba(0, 0, 0, 0.5);
+	color: white;
+	padding: 8px 16px;
+	border-radius: 4px;
+	font-size: 14px;
+	z-index: 1001;
+}

@@ -1,11 +1,10 @@
 {
-	"id": "sample-plugin",
-	"name": "Sample Plugin",
+	"id": "note-image-gallery",
+	"name": "Note Image Gallery",
 	"version": "1.0.0",
-	"minAppVersion": "0.15.0",
-	"description": "Demonstrates some of the capabilities of the Obsidian API.",
-	"author": "Obsidian",
-	"authorUrl": "https://obsidian.md",
-	"fundingUrl": "https://obsidian.md/pricing",
+	"minAppVersion": "1.8.4",
+	"description": "Display all images from your note in a gallery view.",
+	"author": "Lemon695",
+	"authorUrl": "https://github.com/Lemon695",
 	"isDesktopOnly": false
 }
