@@ -1,11 +1,17 @@
 import {App, Modal, Notice, TFile} from 'obsidian';
 import NoteImageGalleryPlugin from "../main";
-import { IncomingMessage } from 'http';
+import {IncomingMessage} from 'http';
+
+interface ImageRequest {
+	controller: AbortController;
+	timestamp: number;
+}
 
 export class CurrentNoteImageGalleryService extends Modal {
 	private images: string[] = [];
 	private loadedImages: number = 0;
 	private totalImages: number = 0;
+	private currentRequests: Map<string, ImageRequest> = new Map();
 
 	constructor(app: App, plugin: NoteImageGalleryPlugin, images: string[]) {
 		super(app);
@@ -14,6 +20,9 @@ export class CurrentNoteImageGalleryService extends Modal {
 	}
 
 	onOpen() {
+		this.loadedImages = 0;
+		this.currentRequests.clear();
+
 		const {contentEl} = this;
 		contentEl.empty();
 		contentEl.addClass('current-note-image-gallery');
@@ -36,55 +45,17 @@ export class CurrentNoteImageGalleryService extends Modal {
 		const imageDiv = imageWall.createDiv('image-item');
 		try {
 			const img = imageDiv.createEl('img');
-
 			const loadingText = imageDiv.createDiv('loading-text');
 			loadingText.setText('加载中...');
 
-			// 检查是否为"微博图片链接"
+			// 检查是否为微博图片链接
 			const isWeiboImage = imagePath.includes('.sinaimg.cn');
 			if (isWeiboImage) {
 				console.log('isWeiboImage---' + imagePath);
 
-				try {
-					const { net } = require('electron').remote;
-
-					const request = net.request({
-						url: imagePath,
-						headers: {
-							'Referer': 'https://weibo.com/'
-						}
-					});
-
-					const imageData: Buffer[] = [];
-
-					request.on('response', (response: IncomingMessage) => {
-						response.on('data', (chunk: Buffer) => {
-							imageData.push(chunk);
-						});
-
-						response.on('end', () => {
-							const buffer = Buffer.concat(imageData);
-							const blob = new Blob([buffer]);
-							img.src = URL.createObjectURL(blob);
-
-							img.onload = () => {
-								loadingText.remove();
-								const ratio = img.naturalHeight / img.naturalWidth;
-								imageDiv.style.gridRowEnd = `span ${Math.ceil(ratio * 20)}`;
-								img.style.opacity = '1';
-								this.loadedImages++;
-								URL.revokeObjectURL(img.src);
-							};
-						});
-					});
-
-					request.end();
-				} catch (error) {
-					console.error('Error loading Weibo image:', error);
-					this.handleImageError(imageDiv, '加载失败');
-					this.loadedImages++;
-				}
+				await this.loadWeiboImage(imagePath, img, imageDiv, loadingText);
 			} else {
+				// 其他图片的处理逻辑保持不变...
 				const loadImage = (useCors: boolean = false) => {
 					if (imagePath.startsWith('http://') || imagePath.startsWith('https://')) {
 						if (useCors) {
@@ -139,6 +110,133 @@ export class CurrentNoteImageGalleryService extends Modal {
 			console.error('Error processing image:', error);
 			this.loadedImages++;
 			this.handleImageError(imageDiv, '处理失败');
+		}
+	}
+
+	private async loadWeiboImage(
+		imagePath: string,
+		img: HTMLImageElement,
+		imageDiv: HTMLElement,
+		loadingText: HTMLElement,
+		retryCount: number = 0
+	): Promise<void> {
+		const MAX_RETRIES = 3;
+
+		return new Promise<void>(async (resolve, reject) => {
+			try {
+				const {net} = require('electron').remote;
+
+				// 创建新请求前检查并清理旧请求
+				const existingRequestId = imageDiv.getAttribute('data-request-id');
+				if (existingRequestId) {
+					const oldRequest = this.currentRequests.get(existingRequestId);
+					if (oldRequest) {
+						oldRequest.controller.abort();
+						this.currentRequests.delete(existingRequestId);
+					}
+				}
+
+				const request = net.request({
+					url: imagePath,
+					headers: {
+						'Referer': 'https://weibo.com/',
+						'Cache-Control': 'no-cache',
+					}
+				});
+
+				// 生成并存储新的请求ID
+				const requestId = Date.now().toString();
+				imageDiv.setAttribute('data-request-id', requestId);
+				this.currentRequests.set(requestId, request);
+
+				const imageData: Buffer[] = [];
+
+				request.on('response', (response: IncomingMessage) => {
+					if (response.statusCode !== 200) {
+						throw new Error(`HTTP Error: ${response.statusCode}`);
+					}
+
+					response.on('data', (chunk: Buffer) => {
+						imageData.push(chunk);
+					});
+
+					response.on('end', () => {
+						try {
+							const buffer = Buffer.concat(imageData);
+							const blob = new Blob([buffer]);
+
+							// 清理旧的 objectURL
+							const oldObjectUrl = imageDiv.getAttribute('data-object-url');
+							if (oldObjectUrl) {
+								URL.revokeObjectURL(oldObjectUrl);
+							}
+
+							const objectUrl = URL.createObjectURL(blob);
+							imageDiv.setAttribute('data-object-url', objectUrl);
+
+							img.onload = () => {
+								loadingText.remove();
+								const ratio = img.naturalHeight / img.naturalWidth;
+								imageDiv.style.gridRowEnd = `span ${Math.ceil(ratio * 20)}`;
+								img.style.opacity = '1';
+								this.loadedImages++;
+								this.currentRequests.delete(requestId);
+								resolve();
+							};
+
+							img.onerror = async () => {
+								URL.revokeObjectURL(objectUrl);
+								if (retryCount < MAX_RETRIES) {
+									console.log(`Retrying image load (${retryCount + 1}/${MAX_RETRIES}): ${imagePath}`);
+									await this.loadWeiboImage(imagePath, img, imageDiv, loadingText, retryCount + 1);
+									resolve();
+								} else {
+									this.handleImageError(imageDiv, '加载失败');
+									this.loadedImages++;
+									reject(new Error('Max retries reached'));
+								}
+							};
+
+							img.src = objectUrl;
+						} catch (error) {
+							this.handleError(error, imageDiv, requestId, retryCount);
+						}
+					});
+				});
+
+				request.on('error', (error: Error) => {
+					this.handleError(error, imageDiv, requestId, retryCount);
+				});
+
+				request.end();
+			} catch (error) {
+				const currentRequestId = imageDiv.getAttribute('data-request-id');
+				this.handleError(error, imageDiv, currentRequestId || undefined, retryCount);
+			}
+		});
+	}
+
+	private handleError(error: Error, imageDiv: HTMLElement, requestId: string | undefined, retryCount: number) {
+		const MAX_RETRIES = 3;
+
+		console.error('Error loading Weibo image:', error);
+		if (requestId) {
+			this.currentRequests.delete(requestId);
+		}
+
+		if (retryCount < MAX_RETRIES) {
+			console.log(`Retrying after error (${retryCount + 1}/${MAX_RETRIES})`);
+			setTimeout(() => {
+				const img = imageDiv.querySelector('img');
+				const loadingText = imageDiv.querySelector('.loading-text');
+				if (img && loadingText) {
+					const imgSrc = (img as HTMLImageElement).src;
+					this.loadWeiboImage(imgSrc, img as HTMLImageElement, imageDiv, loadingText as HTMLElement, retryCount + 1);
+				}
+			}, 1000 * (retryCount + 1));
+		} else {
+			this.handleImageError(imageDiv, '加载失败');
+			this.loadedImages++;
 		}
 	}
 
@@ -339,6 +437,31 @@ export class CurrentNoteImageGalleryService extends Modal {
 			}
 		};
 		document.addEventListener('keydown', handleKeyDown);
+	}
+
+	onClose() {
+		// 清理所有请求
+		this.currentRequests.forEach((request, requestId) => {
+			try {
+				request.controller.abort();
+			} catch (e) {
+				console.error('Error aborting request:', e);
+			}
+		});
+		this.currentRequests.clear();
+
+		// 清理所有的 object URLs
+		const imageItems = this.contentEl.querySelectorAll('.image-item');
+		imageItems.forEach((item: HTMLElement) => {
+			const objectUrl = item.getAttribute('data-object-url');
+			if (objectUrl) {
+				URL.revokeObjectURL(objectUrl);
+			}
+		});
+
+		// 重置状态
+		this.loadedImages = 0;
+		this.contentEl.empty();
 	}
 
 }
