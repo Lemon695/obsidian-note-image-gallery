@@ -1,5 +1,6 @@
 import {App, Modal, Notice, TFile} from 'obsidian';
 import NoteImageGalleryPlugin from "../main";
+import { IncomingMessage } from 'http';
 
 export class CurrentNoteImageGalleryService extends Modal {
 	private images: string[] = [];
@@ -45,33 +46,43 @@ export class CurrentNoteImageGalleryService extends Modal {
 				console.log('isWeiboImage---' + imagePath);
 
 				try {
-					const response = await fetch(imagePath, {
+					const { net } = require('electron').remote;
+
+					const request = net.request({
+						url: imagePath,
 						headers: {
 							'Referer': 'https://weibo.com/'
 						}
 					});
 
-					if (!response.ok) {
-						throw new Error(`HTTP error! status: ${response.status}`);
-					}
+					const imageData: Buffer[] = [];
 
-					const blob = await response.blob();
-					const blobUrl = URL.createObjectURL(blob);
-					img.src = blobUrl;
+					request.on('response', (response: IncomingMessage) => {
+						response.on('data', (chunk: Buffer) => {
+							imageData.push(chunk);
+						});
 
-					img.onload = () => {
-						loadingText.remove();
-						const ratio = img.naturalHeight / img.naturalWidth;
-						imageDiv.style.gridRowEnd = `span ${Math.ceil(ratio * 20)}`;
-						img.style.opacity = '1';
-						this.loadedImages++;
-						URL.revokeObjectURL(blobUrl);
-					};
+						response.on('end', () => {
+							const buffer = Buffer.concat(imageData);
+							const blob = new Blob([buffer]);
+							img.src = URL.createObjectURL(blob);
+
+							img.onload = () => {
+								loadingText.remove();
+								const ratio = img.naturalHeight / img.naturalWidth;
+								imageDiv.style.gridRowEnd = `span ${Math.ceil(ratio * 20)}`;
+								img.style.opacity = '1';
+								this.loadedImages++;
+								URL.revokeObjectURL(img.src);
+							};
+						});
+					});
+
+					request.end();
 				} catch (error) {
 					console.error('Error loading Weibo image:', error);
 					this.handleImageError(imageDiv, '加载失败');
 					this.loadedImages++;
-					return;
 				}
 			} else {
 				const loadImage = (useCors: boolean = false) => {
