@@ -31,38 +31,88 @@ export class CurrentNoteImageGalleryService extends Modal {
 		});
 	}
 
-	private processImage(imagePath: string, imageWall: HTMLElement) {
+	private async processImage(imagePath: string, imageWall: HTMLElement) {
+		const imageDiv = imageWall.createDiv('image-item');
 		try {
-			const imageDiv = imageWall.createDiv('image-item');
 			const img = imageDiv.createEl('img');
 
 			const loadingText = imageDiv.createDiv('loading-text');
 			loadingText.setText('加载中...');
 
-			const realPath = this.getLinkPath(imagePath);
-			if (!realPath) {
-				this.handleImageError(imageDiv, '找不到图片');
-				return;
+			// 检查是否为"微博图片链接"
+			const isWeiboImage = imagePath.includes('.sinaimg.cn');
+			if (isWeiboImage) {
+				console.log('isWeiboImage---' + imagePath);
+
+				try {
+					const response = await fetch(imagePath, {
+						headers: {
+							'Referer': 'https://weibo.com/'
+						}
+					});
+
+					if (!response.ok) {
+						throw new Error(`HTTP error! status: ${response.status}`);
+					}
+
+					const blob = await response.blob();
+					const blobUrl = URL.createObjectURL(blob);
+					img.src = blobUrl;
+
+					img.onload = () => {
+						loadingText.remove();
+						const ratio = img.naturalHeight / img.naturalWidth;
+						imageDiv.style.gridRowEnd = `span ${Math.ceil(ratio * 20)}`;
+						img.style.opacity = '1';
+						this.loadedImages++;
+						URL.revokeObjectURL(blobUrl);
+					};
+				} catch (error) {
+					console.error('Error loading Weibo image:', error);
+					this.handleImageError(imageDiv, '加载失败');
+					this.loadedImages++;
+					return;
+				}
+			} else {
+				const loadImage = (useCors: boolean = false) => {
+					if (imagePath.startsWith('http://') || imagePath.startsWith('https://')) {
+						if (useCors) {
+							img.crossOrigin = 'anonymous';
+						}
+						img.src = imagePath;
+					} else {
+						const realPath = this.getLinkPath(imagePath);
+						if (!realPath) {
+							this.handleImageError(imageDiv, '找不到图片');
+							return;
+						}
+						img.src = this.getResourcePath(realPath);
+					}
+				};
+
+				img.onload = () => {
+					loadingText.remove();
+					const ratio = img.naturalHeight / img.naturalWidth;
+					imageDiv.style.gridRowEnd = `span ${Math.ceil(ratio * 20)}`;
+					img.style.opacity = '1';
+					this.loadedImages++;
+				};
+
+				img.onerror = (e) => {
+					if (!img.crossOrigin) {
+						console.log('Retrying with CORS:', imagePath);
+						loadImage(true);
+					} else {
+						this.handleImageError(imageDiv, '加载失败');
+						this.loadedImages++;
+						console.error('Failed to load image:', imagePath, e);
+					}
+				};
+
+				loadImage(false);
 			}
 
-			img.src = this.getResourcePath(realPath);
-			img.crossOrigin = 'anonymous';
-
-			// 处理图片加载完成
-			img.onload = () => {
-				loadingText.remove();
-				const ratio = img.naturalHeight / img.naturalWidth;
-				imageDiv.style.gridRowEnd = `span ${Math.ceil(ratio * 20)}`;
-				img.style.opacity = '1';
-				this.loadedImages++;
-			};
-
-			// 处理图片加载错误
-			img.onerror = () => {
-				this.handleImageError(imageDiv, '加载失败');
-				this.loadedImages++;
-			};
-
+			// 点击事件处理
 			imageDiv.addEventListener('click', () => {
 				const currentIndex = this.images.indexOf(imagePath);
 				this.createLightboxWithNavigation(currentIndex);
@@ -77,6 +127,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 		} catch (error) {
 			console.error('Error processing image:', error);
 			this.loadedImages++;
+			this.handleImageError(imageDiv, '处理失败');
 		}
 	}
 
@@ -197,7 +248,6 @@ export class CurrentNoteImageGalleryService extends Modal {
 		// 追踪当前图片索引的变量
 		let currentIndex = initialIndex;
 
-		// 导航函数
 		const navigateImage = (newIndex: number) => {
 			// 处理循环导航
 			currentIndex = (newIndex + this.images.length) % this.images.length;

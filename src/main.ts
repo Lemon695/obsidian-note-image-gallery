@@ -1,11 +1,15 @@
 import {Plugin, TFile, MarkdownView, Notice} from 'obsidian';
 import {CurrentNoteImageGalleryService} from "./service/current-note-image-gallery-service";
+import {ImageExtractorService} from "./service/image-extractor-service";
 
 export default class NoteImageGalleryPlugin extends Plugin {
 
+	private imageExtractorService: ImageExtractorService;
 	private currentNoteImageGalleryService: CurrentNoteImageGalleryService | null = null;
 
 	async onload() {
+
+		this.imageExtractorService = new ImageExtractorService();
 
 		this.addCommand({
 			id: 'open-current-note-image-gallery',
@@ -48,7 +52,7 @@ export default class NoteImageGalleryPlugin extends Plugin {
 		if (!fileContent) {
 			return [];
 		}
-		return this.extractImages(fileContent);
+		return this.imageExtractorService.extractImages(fileContent);
 	}
 
 	private async getActiveFileContent(): Promise<string | null> {
@@ -59,19 +63,4 @@ export default class NoteImageGalleryPlugin extends Plugin {
 		return await this.app.vault.read(file);
 	}
 
-	private extractImages(content: string): string[] {
-		const images: string[] = [];
-
-		//匹配Wiki图片链接
-		const wikiImageRegex = /!\[\[(.*?)]]/g;
-		let match;
-
-		while ((match = wikiImageRegex.exec(content)) !== null) {
-			if (match[1]) {
-				images.push(match[1]);
-			}
-		}
-
-		return [...new Set(images)];
-	}
 }
