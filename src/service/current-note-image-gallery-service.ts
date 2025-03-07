@@ -3,7 +3,8 @@ import NoteImageGalleryPlugin from "../main";
 import {IncomingMessage} from 'http';
 
 interface ImageRequest {
-	controller: AbortController;
+	controller?: AbortController;
+	electronRequest?: any;
 	timestamp: number;
 }
 
@@ -61,7 +62,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 		});
 
 		const progressText = progressContainer.createDiv('progress-text');
-		progressText.setText('0%');
+		progressText.setText(`0/${this.totalImages}`);
 
 		// 筛选和排序工具栏
 		const filterToolbar = toolbar.createDiv('filter-toolbar');
@@ -518,7 +519,15 @@ export class CurrentNoteImageGalleryService extends Modal {
 				if (existingRequestId) {
 					const oldRequest = this.currentRequests.get(existingRequestId);
 					if (oldRequest) {
-						oldRequest.controller.abort();
+						if (oldRequest.electronRequest) {
+							try {
+								oldRequest.electronRequest.abort();
+							} catch (e) {
+								console.error('无法中止Electron请求:', e);
+							}
+						} else if (oldRequest.controller) {
+							oldRequest.controller.abort();
+						}
 						this.currentRequests.delete(existingRequestId);
 					}
 				}
@@ -534,7 +543,10 @@ export class CurrentNoteImageGalleryService extends Modal {
 				// 生成并存储新的请求ID
 				const requestId = Date.now().toString();
 				imageDiv.setAttribute('data-request-id', requestId);
-				this.currentRequests.set(requestId, request);
+				this.currentRequests.set(requestId, {
+					electronRequest: request,
+					timestamp: Date.now()
+				});
 
 				const imageData: Buffer[] = [];
 
@@ -648,7 +660,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 			// 计算百分比并更新文本
 			const percentage = Math.round((this.loadedImages / this.totalImages) * 100);
 			if (progressText) {
-				progressText.setText(`${percentage}%`);
+				progressText.setText(`${this.loadedImages}/${this.totalImages}`);
 			}
 
 			// 当加载完成时添加完成动画
@@ -982,7 +994,11 @@ export class CurrentNoteImageGalleryService extends Modal {
 	onClose() {
 		this.currentRequests.forEach((request) => {
 			try {
-				request.controller.abort();
+				if (request.controller) {
+					request.controller.abort();
+				} else if (request.electronRequest) {
+					request.electronRequest.abort();
+				}
 			} catch (e) {
 				console.error('中止请求时出错:', e);
 			}
