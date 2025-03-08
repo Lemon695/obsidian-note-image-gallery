@@ -33,6 +33,8 @@ export class CurrentNoteImageGalleryService extends Modal {
 	private cleanupVirtualScroll: () => void = () => {
 	};
 	private plugin: NoteImageGalleryPlugin;
+	private cleanupQueueMonitor: () => void = () => {
+	};
 
 	constructor(app: App, plugin: NoteImageGalleryPlugin, images: string[]) {
 		super(app);
@@ -151,45 +153,124 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 			isProcessingQueue = true;
 
-			while (loadQueue.length > 0 && activeLoads < MAX_CONCURRENT_LOADS) {
-				const item = loadQueue.shift();
-				if (!item) continue;
+			try {
+				while (loadQueue.length > 0 && activeLoads < MAX_CONCURRENT_LOADS) {
+					const item = loadQueue.shift();
+					if (!item) continue;
 
-				const {path, retries} = item;
-				const imageData = this.imageDataMap.get(path);
+					const {path, retries} = item;
+					const imageData = this.imageDataMap.get(path);
 
-				if (!imageData || imageData.isLoading || imageData.hasError) continue;
+					if (!imageData || imageData.isLoading || imageData.hasError) continue;
 
-				activeLoads++;
+					activeLoads++;
+					imageData.isLoading = true;
 
-				try {
-					await this.loadImage(path, imageData.element);
-				} catch (error) {
-					console.error(`加载图片 ${path} 时出错:`, error);
+					// 检查是否为微博图片
+					const isWeiboImage = path.includes('.sinaimg.cn');
+					console.log(`队列处理图片: ${path}, 是否微博图片: ${isWeiboImage}, 当前活跃加载: ${activeLoads}`);
 
-					// 重试逻辑
-					if (retries < MAX_RETRIES) {
-						console.log(`将 ${path} 排队重试 ${retries + 1}/${MAX_RETRIES}`);
-						loadQueue.push({path, retries: retries + 1});
+					// 使用 Promise 的方式处理图片加载，确保无论成功或失败都会更新计数
+					try {
+						if (isWeiboImage) {
+							// 特殊处理微博图片
+							await new Promise<void>((resolve, reject) => {
+								setTimeout(async () => {
+									try {
+										const imgEl = imageData.element.querySelector('img') || imageData.element.createEl('img');
+										const loadingTextEl = imageData.element.querySelector('.loading-text') ||
+											imageData.element.createDiv('loading-text');
+
+										await this.loadWeiboImage(
+											path,
+											imgEl as HTMLImageElement,
+											imageData.element,
+											loadingTextEl as HTMLElement
+										);
+										resolve();
+									} catch (error) {
+										console.error(`微博图片加载失败: ${path}`, error);
+										reject(error);
+									} finally {
+										// 确保减少活跃计数
+										activeLoads--;
+										console.log(`微博图片处理完成，当前活跃加载: ${activeLoads}`);
+									}
+								}, 0);
+							});
+						} else {
+							// 标准图片加载处理
+							await new Promise<void>((resolve, reject) => {
+								setTimeout(async () => {
+									try {
+										await this.loadImage(path, imageData.element);
+										resolve();
+									} catch (error) {
+										console.error(`加载图片 ${path} 时出错:`, error);
+
+										if (retries < MAX_RETRIES) {
+											console.log(`将非微博图片 ${path} 排队重试 ${retries + 1}/${MAX_RETRIES}`);
+											loadQueue.push({path, retries: retries + 1});
+										} else {
+											imageData.hasError = true;
+											this.handleImageError(imageData.element, '加载失败');
+											this.loadedImages++;
+											this.updateProgressBar();
+										}
+										reject(error);
+									} finally {
+										// 确保减少活跃计数
+										activeLoads--;
+										imageData.isLoading = false;
+										console.log(`标准图片处理完成，当前活跃加载: ${activeLoads}`);
+									}
+								}, 0);
+							});
+						}
+					} catch (error) {
+						// 这里处理的是整个 Promise 的失败，可以记录日志但不需要额外操作
+						// 因为内部已经处理了 activeLoads 和 imageData.isLoading
+						console.error(`图片加载失败处理: ${path}`, error);
 					}
-				} finally {
-					activeLoads--;
 				}
-			}
+			} finally {
+				isProcessingQueue = false;
 
-			isProcessingQueue = false;
-
-			// 如果我们仍有项目和容量，继续处理
-			if (loadQueue.length > 0 && activeLoads < MAX_CONCURRENT_LOADS) {
-				setTimeout(processQueue, 50);
+				// 延迟检查队列，确保状态已更新
+				setTimeout(() => {
+					if (loadQueue.length > 0 && activeLoads < MAX_CONCURRENT_LOADS) {
+						processQueue();
+					}
+				}, 50);
 			}
 		};
 
 		this.queueImageLoad = (imagePath: string) => {
-			if (!loadQueue.some(item => item.path === imagePath)) {
+			const imageData = this.imageDataMap.get(imagePath);
+			if (!imageData) return;
+
+			if (!imageData.isLoading && !imageData.hasError &&
+				!loadQueue.some(item => item.path === imagePath)) {
+				console.log(`将图片加入队列: ${imagePath}, 当前队列长度: ${loadQueue.length}, 当前活跃加载: ${activeLoads}`);
 				loadQueue.push({path: imagePath, retries: 0});
 				setTimeout(processQueue, 0);
 			}
+		};
+
+		const queueMonitor = setInterval(() => {
+			if (loadQueue.length > 0 || activeLoads > 0) {
+				console.log(`队列监控 - 队列长度: ${loadQueue.length}, 活跃加载: ${activeLoads}, 是否处理中: ${isProcessingQueue}`);
+
+				// 如果队列有内容但没有活跃加载，并且未处理中，尝试重启队列处理
+				if (loadQueue.length > 0 && activeLoads === 0 && !isProcessingQueue) {
+					console.log('队列似乎卡住了，尝试重启处理');
+					setTimeout(processQueue, 100);
+				}
+			}
+		}, 5000);
+
+		this.cleanupQueueMonitor = () => {
+			clearInterval(queueMonitor);
 		};
 	}
 
@@ -649,6 +730,22 @@ export class CurrentNoteImageGalleryService extends Modal {
 		resolve: () => void,
 		reject: (error: any) => void
 	): Promise<void> {
+		const electron = require('electron');
+		if (!electron || !electron.remote || !electron.remote.net) {
+			console.error('Electron API 不可用');
+			// 回退到标准方式加载
+			img.src = imagePath;
+
+			// 确保更新图片数据状态
+			const imageData = this.imageDataMap.get(imagePath);
+			if (imageData) {
+				imageData.isLoading = false;
+			}
+
+			reject(new Error('Electron API 不可用'));
+			return;
+		}
+
 		const {net} = require('electron').remote;
 		const MAX_RETRIES = 3;
 
@@ -767,9 +864,45 @@ export class CurrentNoteImageGalleryService extends Modal {
 		});
 
 		request.on('error', (error: Error) => {
+			console.error(`微博图片请求错误: ${imagePath}`, error);
 			this.handleError(error, imageDiv, requestId, retryCount);
+
+			// 确保更新图片数据状态
+			const imageData = this.imageDataMap.get(imagePath);
+			if (imageData) {
+				imageData.isLoading = false;
+			}
+
 			reject(error);
 		});
+
+		const timeoutId = setTimeout(() => {
+			console.warn(`微博图片请求超时: ${imagePath}`);
+			try {
+				request.abort();
+			} catch (e) {
+				console.error('中止超时请求时出错:', e);
+			}
+			this.currentRequests.delete(requestId);
+
+			// 确保更新图片数据状态
+			const imageData = this.imageDataMap.get(imagePath);
+			if (imageData) {
+				imageData.isLoading = false;
+			}
+
+			if (retryCount < MAX_RETRIES) {
+				console.log(`超时后重试加载微博图片 (${retryCount + 1}/${MAX_RETRIES}): ${imagePath}`);
+				this.loadWeiboImage(imagePath, img, imageDiv, loadingText, retryCount + 1)
+					.then(resolve)
+					.catch(reject);
+			} else {
+				this.handleImageError(imageDiv, '请求超时');
+				this.loadedImages++;
+				this.updateProgressBar();
+				reject(new Error('Request timeout'));
+			}
+		}, 5000);
 
 		request.end();
 	}
@@ -1168,6 +1301,11 @@ export class CurrentNoteImageGalleryService extends Modal {
 		if (this.intersectionObserver) {
 			this.intersectionObserver.disconnect();
 			this.intersectionObserver = null;
+		}
+
+		// 清理队列监控
+		if (this.cleanupQueueMonitor) {
+			this.cleanupQueueMonitor();
 		}
 
 		// 清理虚拟滚动相关事件监听器
