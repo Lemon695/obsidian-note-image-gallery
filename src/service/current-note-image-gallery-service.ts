@@ -555,10 +555,19 @@ export class CurrentNoteImageGalleryService extends Modal {
 				throw new Error(`HTTP error: ${response.status}`);
 			}
 
-			// 获取ETag用于缓存验证
+			// 获取ETag用于缓存验证和MIME类型
 			const etag = response.headers.get('etag') || undefined;
+			const contentType = response.headers.get('content-type') || undefined;
 			const arrayBuffer = await response.arrayBuffer();
-			const base64Data = await this.plugin.imageCacheService.cacheImage(imagePath, arrayBuffer, etag);
+
+			// 传递MIME类型到缓存服务
+			const base64Data = await this.plugin.imageCacheService.cacheImage(
+				imagePath,
+				arrayBuffer,
+				etag,
+				contentType || undefined
+			);
+
 			img.src = base64Data;
 		} catch (error) {
 			console.error('Fetching image failed:', error);
@@ -700,7 +709,16 @@ export class CurrentNoteImageGalleryService extends Modal {
 						URL.revokeObjectURL(oldObjectUrl);
 					}
 
-					await this.plugin.imageCacheService.cacheImage(imagePath, buffer.buffer);
+					// 尝试从响应头获取内容类型
+					const contentType = response.headers['content-type'];
+
+					// 传递内容类型到缓存服务
+					await this.plugin.imageCacheService.cacheImage(
+						imagePath,
+						buffer.buffer,
+						undefined,
+						contentType
+					);
 
 					const objectUrl = URL.createObjectURL(blob);
 					imageDiv.setAttribute('data-object-url', objectUrl);

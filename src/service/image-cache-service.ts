@@ -23,7 +23,13 @@ export class ImageCacheService {
 	/**
 	 * 将图片添加到缓存
 	 */
-	async cacheImage(url: string, data: ArrayBuffer, etag?: string): Promise<string> {
+	async cacheImage(url: string, data: ArrayBuffer, etag?: string, mimeType?: string): Promise<string> {
+		// 检查是否应该缓存此图片
+		if (!this.shouldCacheImage(url, mimeType)) {
+			// 不缓存，但仍然返回base64数据供直接使用
+			return await this.arrayBufferToBase64(data);
+		}
+
 		// 转换为base64
 		const base64Data = await this.arrayBufferToBase64(data);
 
@@ -202,5 +208,67 @@ export class ImageCacheService {
 	 */
 	setShouldUseCacheCallback(callback: () => boolean): void {
 		this.shouldUseCacheCallback = callback;
+	}
+
+	/**
+	 * 检查是否应该缓存此图片
+	 * @param url 图片URL
+	 * @param mimeType 可选的MIME类型
+	 */
+	shouldCacheImage(url: string, mimeType?: string): boolean {
+		// 如果缓存被全局禁用，直接返回false
+		if (!this.shouldUseCache()) {
+			return false;
+		}
+
+		// 如果提供了MIME类型，直接检查
+		if (mimeType) {
+			return this.isStaticImageMimeType(mimeType);
+		}
+
+		// 否则从URL检查文件扩展名
+		const fileExtension = this.getFileExtension(url);
+		return this.isStaticImageExtension(fileExtension);
+	}
+
+	/**
+	 * 获取URL的文件扩展名
+	 */
+	private getFileExtension(url: string): string {
+		try {
+			// 移除URL中的查询参数
+			const urlWithoutParams = url.split('?')[0];
+			// 获取最后一个.之后的内容作为扩展名
+			const parts = urlWithoutParams.split('.');
+			if (parts.length > 1) {
+				return parts[parts.length - 1].toLowerCase();
+			}
+		} catch (e) {
+			console.error('Error extracting file extension:', e);
+		}
+		return '';
+	}
+
+	/**
+	 * 检查文件扩展名是否为静态图片
+	 */
+	private isStaticImageExtension(extension: string): boolean {
+		const staticImageExtensions = ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'tiff', 'tif', 'svg'];
+		return staticImageExtensions.includes(extension.toLowerCase());
+	}
+
+	/**
+	 * 检查MIME类型是否为静态图片
+	 */
+	private isStaticImageMimeType(mimeType: string): boolean {
+		const staticImageMimeTypes = [
+			'image/jpeg',
+			'image/png',
+			'image/webp',
+			'image/bmp',
+			'image/tiff',
+			'image/svg+xml'
+		];
+		return staticImageMimeTypes.includes(mimeType.toLowerCase());
 	}
 }
