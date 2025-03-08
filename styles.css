@@ -420,3 +420,9 @@
 	font-size: 12px;
 	cursor: pointer;
 }
+
+.image-item img[complete="true"],
+.image-item img.loaded,
+.image-item img[src] {
+	opacity: 1 !important;
+}
