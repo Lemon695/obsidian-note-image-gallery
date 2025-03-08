@@ -32,11 +32,13 @@ export class CurrentNoteImageGalleryService extends Modal {
 	private intersectionObserver: IntersectionObserver | null = null;
 	private cleanupVirtualScroll: () => void = () => {
 	};
+	private plugin: NoteImageGalleryPlugin;
 
 	constructor(app: App, plugin: NoteImageGalleryPlugin, images: string[]) {
 		super(app);
 		this.images = images;
 		this.totalImages = images.length;
+		this.plugin = plugin;
 	}
 
 	onOpen() {
@@ -236,27 +238,33 @@ export class CurrentNoteImageGalleryService extends Modal {
 				const isRemote = imagePath.startsWith('http://') || imagePath.startsWith('https://');
 				const matchesFilter =
 					currentFilter === '全部' || currentFilter === 'all' ||
-					(currentFilter === '本地图片' || currentFilter === 'local') && !isRemote ||
-					(currentFilter === '网络图片' || currentFilter === 'remote') && isRemote;
+					((currentFilter === '本地图片' || currentFilter === 'local') && !isRemote) ||
+					((currentFilter === '网络图片' || currentFilter === 'remote') && isRemote);
+
+				// 首先处理筛选条件
+				if (!matchesFilter) {
+					// 不符合筛选条件，直接隐藏
+					data.element.style.display = 'none';
+					return;
+				}
+
+				// 符合筛选条件的图片一定要显示（设置display为空）
+				data.element.style.display = '';
 
 				// 检查是否在可视区域内
 				const isVisible = data.position.bottom >= viewportTop &&
 					data.position.top <= viewportBottom;
 
-				if (isVisible && matchesFilter) {
+				if (isVisible) {
 					// 在可视区域内且符合筛选条件
 					if (!data.isLoading && !data.objectUrl && !data.hasError) {
 						this.queueImageLoad(data.path);
 					}
-					data.element.style.display = ''; // 显示元素
-					data.element.style.visibility = '';
-				} else if (!matchesFilter) {
-					// 不符合筛选条件
-					data.element.style.display = 'none';
+					data.element.style.visibility = ''; // 显示元素
 				} else {
-					// 符合筛选条件但不在可视区域内
+					// 不在可视区域内但符合筛选条件
+					// 设置为隐藏但保留在DOM中
 					data.element.style.visibility = 'hidden';
-					data.element.style.display = ''; // 保留在DOM中但不可见
 				}
 			});
 		};
@@ -302,13 +310,13 @@ export class CurrentNoteImageGalleryService extends Modal {
 	}
 
 	private filterImages(filterType: string) {
+		// 首先更新所有图片的显示状态
 		this.imageDataMap.forEach((data) => {
 			const imagePath = data.path;
 			const isRemote = imagePath.startsWith('http://') || imagePath.startsWith('https://');
 
 			if (filterType === 'all' || filterType === '全部') {
 				data.element.style.display = '';
-				// 重置visibility属性，让虚拟滚动控制
 				data.element.style.visibility = '';
 			} else if ((filterType === '本地图片' || filterType === 'local') && !isRemote) {
 				data.element.style.display = '';
@@ -321,10 +329,26 @@ export class CurrentNoteImageGalleryService extends Modal {
 			}
 		});
 
-		// 应用筛选后重新触发一次滚动处理，确保可见性正确
+		// 在筛选后更新位置信息，然后再触发滚动处理
 		const container = this.contentEl.querySelector('.image-wall-container');
 		if (container) {
-			container.dispatchEvent(new Event('scroll'));
+			// 更新位置信息
+			setTimeout(() => {
+				this.imageDataMap.forEach((data) => {
+					const el = data.element;
+					if (el && el.style.display !== 'none') {
+						const rect = el.getBoundingClientRect();
+						data.position = {
+							top: rect.top + container.scrollTop,
+							bottom: rect.bottom + container.scrollTop,
+							height: rect.height
+						};
+					}
+				});
+
+				// 然后触发滚动事件
+				container.dispatchEvent(new Event('scroll'));
+			}, 100); // 增加短暂延迟确保DOM已更新
 		}
 	}
 
@@ -406,65 +430,101 @@ export class CurrentNoteImageGalleryService extends Modal {
 		loadingText: HTMLElement
 	): Promise<void> {
 		return new Promise((resolve, reject) => {
-			// 为此请求创建新的 AbortController
-			const controller = new AbortController();
-			const requestId = Date.now().toString();
+			const imageData = this.imageDataMap.get(imagePath);
+			if (!imageData) {
+				reject(new Error('Image data not found'));
+				return;
+			}
 
-			// 保存请求数据
-			this.currentRequests.set(requestId, {
-				controller,
-				timestamp: Date.now()
-			});
+			const cachedImage = this.plugin.imageCacheService.getCachedImage(imagePath);
+			if (cachedImage) {
+				console.log(`Loading image from cache: ${imagePath}`);
 
-			imageDiv.setAttribute('data-request-id', requestId);
+				// 从缓存加载
+				img.onload = () => {
+					this.handleImageLoadSuccess(img, imageDiv, loadingText, imagePath);
+					resolve();
+				};
 
-			// 设置图片加载处理程序
-			img.onload = () => {
-				loadingText.remove();
+				img.onerror = (e) => {
+					console.error('Cached image load error:', e);
+					// 缓存加载失败，回退到正常加载
+					this.loadImageWithoutCache(imagePath, img, imageDiv, loadingText, resolve, reject);
+				};
 
-				// 移除占位符
-				const placeholder = imageDiv.querySelector('.image-placeholder');
-				if (placeholder) {
-					placeholder.remove();
-				}
+				// 设置图片源为缓存的base64数据
+				img.src = cachedImage.data;
+				return;
+			}
 
-				const ratio = img.naturalHeight / img.naturalWidth;
+			// 没有缓存，正常加载图片
+			this.loadImageWithoutCache(imagePath, img, imageDiv, loadingText, resolve, reject);
+		});
+	}
 
-				const baseHeight = 10;
-				const heightSpan = Math.min(Math.ceil(ratio * baseHeight), 30);
+	private loadImageWithoutCache(
+		imagePath: string,
+		img: HTMLImageElement,
+		imageDiv: HTMLElement,
+		loadingText: HTMLElement,
+		resolve: () => void,
+		reject: (error: any) => void
+	): void {
+		const controller = new AbortController();
+		const requestId = Date.now().toString();
 
-				imageDiv.style.gridRowEnd = `span ${heightSpan}`;
-				img.style.opacity = '1';
+		// 保存请求数据
+		this.currentRequests.set(requestId, {
+			controller,
+			timestamp: Date.now()
+		});
+
+		imageDiv.setAttribute('data-request-id', requestId);
+
+		// 设置图片加载处理程序
+		img.onload = () => {
+			this.handleImageLoadSuccess(img, imageDiv, loadingText, imagePath);
+			this.currentRequests.delete(requestId);
+			resolve();
+		};
+
+		img.onerror = async (e) => {
+			console.error('图片加载错误:', imagePath);
+
+			// 如果尚未尝试，先使用 CORS
+			if (!img.crossOrigin && (imagePath.startsWith('http://') || imagePath.startsWith('https://'))) {
+				console.log('使用 CORS 重试:', imagePath);
+				img.crossOrigin = 'anonymous';
+				img.src = imagePath;
+				return;
+			}
+
+			// 如果到达这里，重试失败或不适用
+			this.handleImageError(imageDiv, '加载失败');
+			this.loadedImages++;
+			this.updateProgressBar();
+
+			// 更新图片数据
+			const imageData = this.imageDataMap.get(imagePath);
+			if (imageData) {
+				imageData.isLoading = false;
+				imageData.hasError = true;
+			}
+
+			this.currentRequests.delete(requestId);
+			reject(e);
+		};
+
+		// 如果是网络图片，尝试通过fetch获取以便缓存
+		if (imagePath.startsWith('http://') || imagePath.startsWith('https://')) {
+			this.fetchAndCacheImage(imagePath, img);
+		} else {
+			const realPath = this.getLinkPath(imagePath);
+			if (!realPath) {
+				this.handleImageError(imageDiv, '找不到图片');
 				this.loadedImages++;
 				this.updateProgressBar();
-				this.currentRequests.delete(requestId);
 
-				// 更新图片数据
-				const imageData = this.imageDataMap.get(imagePath);
-				if (imageData) {
-					imageData.isLoading = false;
-				}
-
-				resolve();
-			};
-
-			img.onerror = (e) => {
-				console.error('图片加载错误:', imagePath);
-
-				// 如果尚未尝试，先使用 CORS
-				if (!img.crossOrigin && (imagePath.startsWith('http://') || imagePath.startsWith('https://'))) {
-					console.log('使用 CORS 重试:', imagePath);
-					img.crossOrigin = 'anonymous';
-					img.src = imagePath;
-					return; // 提前退出以给重试一个机会
-				}
-
-				// 如果到达这里，重试失败或不适用
-				this.handleImageError(imageDiv, '加载失败');
-				this.loadedImages++;
-				this.updateProgressBar();
-
-				// 更新图片数据
 				const imageData = this.imageDataMap.get(imagePath);
 				if (imageData) {
 					imageData.isLoading = false;
@@ -472,33 +532,64 @@ export class CurrentNoteImageGalleryService extends Modal {
 				}
 
 				this.currentRequests.delete(requestId);
-				reject(e);
+				reject(new Error('Image path not found'));
+				return;
 			}
+			img.src = this.getResourcePath(realPath);
+		}
+	}
 
-			// 设置 src 开始加载
-			if (imagePath.startsWith('http://') || imagePath.startsWith('https://')) {
-				img.src = imagePath;
-			} else {
-				const realPath = this.getLinkPath(imagePath);
-				if (!realPath) {
-					this.handleImageError(imageDiv, '找不到图片');
-					this.loadedImages++;
-					this.updateProgressBar();
-
-					// 更新图片数据
-					const imageData = this.imageDataMap.get(imagePath);
-					if (imageData) {
-						imageData.isLoading = false;
-						imageData.hasError = true;
-					}
-
-					this.currentRequests.delete(requestId);
-					reject(new Error('Image path not found'));
-					return;
+	private async fetchAndCacheImage(imagePath: string, img: HTMLImageElement): Promise<void> {
+		try {
+			// 使用fetch API获取图片
+			const response = await fetch(imagePath, {
+				method: 'GET',
+				credentials: 'omit',
+				cache: 'no-cache',
+				headers: {
+					'Cache-Control': 'no-cache',
 				}
-				img.src = this.getResourcePath(realPath);
+			});
+
+			if (!response.ok) {
+				throw new Error(`HTTP error: ${response.status}`);
 			}
-		});
+
+			// 获取ETag用于缓存验证
+			const etag = response.headers.get('etag') || undefined;
+			const arrayBuffer = await response.arrayBuffer();
+			const base64Data = await this.plugin.imageCacheService.cacheImage(imagePath, arrayBuffer, etag);
+			img.src = base64Data;
+		} catch (error) {
+			console.error('Fetching image failed:', error);
+			// 如果获取失败，回退到直接设置src
+			img.src = imagePath;
+		}
+	}
+
+	private handleImageLoadSuccess(img: HTMLImageElement, imageDiv: HTMLElement, loadingText: HTMLElement, imagePath: string): void {
+		loadingText.remove();
+
+		// 移除占位符
+		const placeholder = imageDiv.querySelector('.image-placeholder');
+		if (placeholder) {
+			placeholder.remove();
+		}
+
+		const ratio = img.naturalHeight / img.naturalWidth;
+
+		const baseHeight = 10;
+		const heightSpan = Math.min(Math.ceil(ratio * baseHeight), 30);
+
+		imageDiv.style.gridRowEnd = `span ${heightSpan}`;
+		img.style.opacity = '1';
+		this.loadedImages++;
+		this.updateProgressBar();
+
+		const imageData = this.imageDataMap.get(imagePath);
+		if (imageData) {
+			imageData.isLoading = false;
+		}
 	}
 
 	private async loadWeiboImage(
@@ -512,119 +603,157 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 		return new Promise<void>(async (resolve, reject) => {
 			try {
-				const {net} = require('electron').remote;
+				const cachedImage = this.plugin.imageCacheService.getCachedImage(imagePath);
+				if (cachedImage) {
+					console.log(`Loading Weibo image from cache: ${imagePath}`);
 
-				// 创建新请求前检查并清理旧请求
-				const existingRequestId = imageDiv.getAttribute('data-request-id');
-				if (existingRequestId) {
-					const oldRequest = this.currentRequests.get(existingRequestId);
-					if (oldRequest) {
-						if (oldRequest.electronRequest) {
-							try {
-								oldRequest.electronRequest.abort();
-							} catch (e) {
-								console.error('无法中止Electron请求:', e);
-							}
-						} else if (oldRequest.controller) {
-							oldRequest.controller.abort();
-						}
-						this.currentRequests.delete(existingRequestId);
-					}
+					img.onload = () => {
+						this.handleImageLoadSuccess(img, imageDiv, loadingText, imagePath);
+						resolve();
+					};
+
+					img.onerror = async (e) => {
+						console.error('Cached Weibo image load error:', e);
+						await this.loadWeiboImageWithoutCache(imagePath, img, imageDiv, loadingText, retryCount, resolve, reject);
+					};
+
+					// 设置图片源为缓存的base64数据
+					img.src = cachedImage.data;
+					return;
 				}
 
-				const request = net.request({
-					url: imagePath,
-					headers: {
-						'Referer': 'https://weibo.com/',
-						'Cache-Control': 'no-cache',
-					}
-				});
-
-				// 生成并存储新的请求ID
-				const requestId = Date.now().toString();
-				imageDiv.setAttribute('data-request-id', requestId);
-				this.currentRequests.set(requestId, {
-					electronRequest: request,
-					timestamp: Date.now()
-				});
-
-				const imageData: Buffer[] = [];
-
-				request.on('response', (response: IncomingMessage) => {
-					if (response.statusCode !== 200) {
-						throw new Error(`HTTP Error: ${response.statusCode}`);
-					}
-
-					response.on('data', (chunk: Buffer) => {
-						imageData.push(chunk);
-					});
-
-					response.on('end', () => {
-						try {
-							const buffer = Buffer.concat(imageData);
-							const blob = new Blob([buffer]);
-
-							// 清理旧的 objectURL
-							const oldObjectUrl = imageDiv.getAttribute('data-object-url');
-							if (oldObjectUrl) {
-								URL.revokeObjectURL(oldObjectUrl);
-							}
-
-							const objectUrl = URL.createObjectURL(blob);
-							imageDiv.setAttribute('data-object-url', objectUrl);
-
-							img.onload = () => {
-								loadingText.remove();
-
-								// 移除占位符
-								const placeholder = imageDiv.querySelector('.image-placeholder');
-								if (placeholder) {
-									placeholder.remove();
-								}
-
-								const ratio = img.naturalHeight / img.naturalWidth;
-
-								const baseHeight = 10;
-								const heightSpan = Math.min(Math.ceil(ratio * baseHeight), 30);
-
-								imageDiv.style.gridRowEnd = `span ${heightSpan}`;
-								img.style.opacity = '1';
-								this.loadedImages++;
-								this.updateProgressBar();
-								this.currentRequests.delete(requestId);
-								resolve();
-							};
-
-							img.onerror = async () => {
-								URL.revokeObjectURL(objectUrl);
-								if (retryCount < MAX_RETRIES) {
-									console.log(`Retrying image load (${retryCount + 1}/${MAX_RETRIES}): ${imagePath}`);
-									await this.loadWeiboImage(imagePath, img, imageDiv, loadingText, retryCount + 1);
-									resolve();
-								} else {
-									this.handleImageError(imageDiv, '加载失败');
-									this.loadedImages++;
-									reject(new Error('Max retries reached'));
-								}
-							};
-
-							img.src = objectUrl;
-						} catch (error) {
-							this.handleError(error, imageDiv, requestId, retryCount);
-						}
-					});
-				});
-
-				request.on('error', (error: Error) => {
-					this.handleError(error, imageDiv, requestId, retryCount);
-				});
-
-				request.end();
+				await this.loadWeiboImageWithoutCache(imagePath, img, imageDiv, loadingText, retryCount, resolve, reject);
 			} catch (error) {
 				const currentRequestId = imageDiv.getAttribute('data-request-id');
 				this.handleError(error, imageDiv, currentRequestId || undefined, retryCount);
+				reject(error);
 			}
 		});
+	}
+
+	private async loadWeiboImageWithoutCache(
+		imagePath: string,
+		img: HTMLImageElement,
+		imageDiv: HTMLElement,
+		loadingText: HTMLElement,
+		retryCount: number,
+		resolve: () => void,
+		reject: (error: any) => void
+	): Promise<void> {
+		const {net} = require('electron').remote;
+		const MAX_RETRIES = 3;
+
+		// 创建新请求前检查并清理旧请求
+		const existingRequestId = imageDiv.getAttribute('data-request-id');
+		if (existingRequestId) {
+			const oldRequest = this.currentRequests.get(existingRequestId);
+			if (oldRequest) {
+				if (oldRequest.electronRequest) {
+					try {
+						oldRequest.electronRequest.abort(); // Abort Electron request
+					} catch (e) {
+						console.error('Failed to abort Electron request:', e);
+					}
+				} else if (oldRequest.controller) {
+					oldRequest.controller.abort(); // Abort fetch request
+				}
+				this.currentRequests.delete(existingRequestId);
+			}
+		}
+
+		const request = net.request({
+			url: imagePath,
+			headers: {
+				'Referer': 'https://weibo.com/',
+				'Cache-Control': 'no-cache',
+			}
+		});
+
+		const requestId = Date.now().toString();
+		imageDiv.setAttribute('data-request-id', requestId);
+
+		this.currentRequests.set(requestId, {
+			electronRequest: request,
+			timestamp: Date.now()
+		});
+
+		const imageData: Buffer[] = [];
+
+		request.on('response', (response: any) => {
+			if (response.statusCode !== 200) {
+				reject(new Error(`HTTP Error: ${response.statusCode}`));
+				return;
+			}
+
+			response.on('data', (chunk: Buffer) => {
+				imageData.push(chunk);
+			});
+
+			response.on('end', async () => {
+				try {
+					const buffer = Buffer.concat(imageData);
+					const blob = new Blob([buffer]);
+
+					// 清理旧的 objectURL
+					const oldObjectUrl = imageDiv.getAttribute('data-object-url');
+					if (oldObjectUrl) {
+						URL.revokeObjectURL(oldObjectUrl);
+					}
+
+					await this.plugin.imageCacheService.cacheImage(imagePath, buffer.buffer);
+
+					const objectUrl = URL.createObjectURL(blob);
+					imageDiv.setAttribute('data-object-url', objectUrl);
+
+					img.onload = () => {
+						loadingText.remove();
+
+						// 移除占位符
+						const placeholder = imageDiv.querySelector('.image-placeholder');
+						if (placeholder) {
+							placeholder.remove();
+						}
+
+						const ratio = img.naturalHeight / img.naturalWidth;
+
+						const baseHeight = 10;
+						const heightSpan = Math.min(Math.ceil(ratio * baseHeight), 30);
+
+						imageDiv.style.gridRowEnd = `span ${heightSpan}`;
+						img.style.opacity = '1';
+						this.loadedImages++;
+						this.updateProgressBar();
+						this.currentRequests.delete(requestId);
+						resolve();
+					};
+
+					img.onerror = async () => {
+						URL.revokeObjectURL(objectUrl);
+						if (retryCount < MAX_RETRIES) {
+							console.log(`Retrying image load (${retryCount + 1}/${MAX_RETRIES}): ${imagePath}`);
+							await this.loadWeiboImage(imagePath, img, imageDiv, loadingText, retryCount + 1);
+							resolve();
+						} else {
+							this.handleImageError(imageDiv, '加载失败');
+							this.loadedImages++;
+							reject(new Error('Max retries reached'));
+						}
+					};
+
+					img.src = objectUrl;
+				} catch (error) {
+					this.handleError(error, imageDiv, requestId, retryCount);
+					reject(error);
+				}
+			});
+		});
+
+		request.on('error', (error: Error) => {
+			this.handleError(error, imageDiv, requestId, retryCount);
+			reject(error);
+		});
+
+		request.end();
 	}
 
 	private handleError(error: Error, imageDiv: HTMLElement, requestId: string | undefined, retryCount: number) {
