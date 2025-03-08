@@ -421,8 +421,8 @@
 	cursor: pointer;
 }
 
-.image-item img[complete="true"],
-.image-item img.loaded,
-.image-item img[src] {
+.image-item img[style*="opacity: 1"] {
 	opacity: 1 !important;
+	z-index: 2;
+	position: relative;
 }
