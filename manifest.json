@@ -1,7 +1,7 @@
 {
 	"id": "note-image-gallery",
 	"name": "Note Image Gallery",
-	"version": "1.0.2",
+	"version": "1.0.3",
 	"minAppVersion": "1.8.4",
 	"description": "Display all images from your note in a gallery view.",
 	"author": "Lemon695",
