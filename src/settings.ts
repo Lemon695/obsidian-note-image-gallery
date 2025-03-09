@@ -1,16 +1,21 @@
 import {App, PluginSettingTab, Setting} from 'obsidian';
 import NoteImageGalleryPlugin from './main';
+import {log, LogLevel} from './utils/log-utils';
 
 export interface Settings {
 	enableCache: boolean;
 	maxCacheAge: number; // 天数
 	maxCacheSize: number; // MB
+
+	debugMode: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
 	enableCache: true,
 	maxCacheAge: 7,
-	maxCacheSize: 100
+	maxCacheSize: 100,
+
+	debugMode: false,
 };
 
 export class NoteImageGallerySettingTab extends PluginSettingTab {
@@ -64,12 +69,34 @@ export class NoteImageGallerySettingTab extends PluginSettingTab {
 					this.plugin.imageCacheService.setMaxCacheSize(value * 1024 * 1024);
 				}));
 
-		const cacheSizeInMB = (this.plugin.imageCacheService.getCacheSize() / (1024 * 1024)).toFixed(2);
+		let cacheSizeInMB = "0.00";
+		try {
+			const cacheSize = this.plugin.imageCacheService.getCacheSize();
+			if (typeof cacheSize === 'number' && !isNaN(cacheSize) && cacheSize > 0) {
+				cacheSizeInMB = (cacheSize / (1024 * 1024)).toFixed(2);
+			}
+		} catch (e) {
+			log.error("获取缓存大小失败:", e);
+		}
 
 		containerEl.createEl('h3', {text: '缓存状态'});
-		containerEl.createEl('p', {
+		const cacheStatusEl = containerEl.createEl('p', {
 			text: `当前缓存大小: ${cacheSizeInMB} MB / ${this.plugin.settings.maxCacheSize} MB`
 		});
+
+		new Setting(containerEl)
+			.setName('刷新缓存状态')
+			.setDesc('重新计算缓存大小')
+			.addButton(button => button
+				.setButtonText('刷新')
+				.onClick(async () => {
+					// 重新初始化缓存以获取最新状态
+					await this.plugin.imageCacheService.initCache();
+
+					// 更新显示的缓存大小
+					const newCacheSizeInMB = (this.plugin.imageCacheService.getCacheSize() / (1024 * 1024)).toFixed(2);
+					cacheStatusEl.setText(`当前缓存大小: ${newCacheSizeInMB} MB / ${this.plugin.settings.maxCacheSize} MB`);
+				}));
 
 		// 添加清除缓存按钮
 		new Setting(containerEl)
@@ -78,9 +105,26 @@ export class NoteImageGallerySettingTab extends PluginSettingTab {
 			.addButton(button => button
 				.setButtonText('清除全部缓存')
 				.onClick(async () => {
-					this.plugin.imageCacheService.clearAllCache();
+					await this.plugin.imageCacheService.clearAllCache();
 					// 刷新界面,显示更新后的缓存大小
 					this.display();
+				}));
+
+		new Setting(containerEl)
+			.setName('Developer')
+			.setHeading()
+
+		new Setting(containerEl)
+			.setName('Debug mode')
+			.setDesc('Enable debug mode to log detailed information to the console.')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.debugMode)
+				.onChange(async (value) => {
+					this.plugin.settings.debugMode = value;
+
+					log.setDebugMode(value);
+					log.debug(() => "调试模式已" + (value ? "启用" : "禁用"));
+					await this.plugin.saveSettings();
 				}));
 	}
 }

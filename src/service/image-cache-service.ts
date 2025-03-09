@@ -1,4 +1,5 @@
-import {App} from 'obsidian';
+import {App, TFile, Vault} from 'obsidian';
+import {log} from "../utils/log-utils";
 
 interface CachedImage {
 	data: string;  // Base64编码的图片数据
@@ -6,18 +7,160 @@ interface CachedImage {
 	etag?: string;  // HTTP ETag用于验证缓存是否有效
 }
 
+interface CacheIndex {
+	[url: string]: {
+		timestamp: number;
+		etag?: string;
+		filename: string;
+		size: number;
+	}
+}
+
 export class ImageCacheService {
-	private cacheKey = 'obsidian-note-image-gallery-cache';
+	private cacheDir = '.obsidian/plugins/note-image-gallery/cache';
+	private indexFile = '.obsidian/plugins/note-image-gallery/cache/index.json';
 	private maxCacheAge = 7 * 24 * 60 * 60 * 1000;  // 7天缓存过期时间
-	private maxCacheSize = 100 * 1024 * 1024;  // 50MB最大缓存大小
-	private cache: Record<string, CachedImage> = {};
+	private maxCacheSize = 100 * 1024 * 1024;  // 100MB最大缓存大小
+	private cacheIndex: CacheIndex = {};
 	private app: App;
-	// 回调函数类型
 	private shouldUseCacheCallback: (() => boolean) | null = null;
+	private _isSaving: boolean = false;
+	private totalCacheSize: number = 0;
 
 	constructor(app: App) {
 		this.app = app;
-		this.loadCache();
+		this.loadCacheIndex();
+	}
+
+	/**
+	 * 初始化缓存目录
+	 */
+	private async ensureCacheDir() {
+		const adapter = this.app.vault.adapter;
+
+		const pluginDir = '.obsidian/plugins/note-image-gallery';
+		if (!(await adapter.exists(pluginDir))) {
+			await adapter.mkdir(pluginDir);
+		}
+
+		const exists = await adapter.exists(this.cacheDir);
+		if (!exists) {
+			await adapter.mkdir(this.cacheDir);
+		}
+	}
+
+	public async initCache(): Promise<void> {
+		try {
+			await this.ensureCacheDir();
+			await this.loadCacheIndex();
+			await this.cleanupOrphanedFiles();
+			log.debug(() => `缓存服务初始化完成，总大小: ${Math.round(this.totalCacheSize / 1024 / 1024)}MB`);
+		} catch (error) {
+			log.error(() => `缓存服务初始化失败:`, error);
+			// 确保基本的缓存功能可用
+			this.cacheIndex = {};
+			this.totalCacheSize = 0;
+		}
+	}
+
+	/**
+	 * 加载缓存索引
+	 */
+	private async loadCacheIndex() {
+		await this.ensureCacheDir();
+
+		const adapter = this.app.vault.adapter;
+		const exists = await adapter.exists(this.indexFile);
+
+		if (exists) {
+			try {
+				const content = await adapter.read(this.indexFile);
+				this.cacheIndex = JSON.parse(content);
+
+				// 计算总缓存大小
+				this.totalCacheSize = 0;
+				Object.values(this.cacheIndex).forEach(entry => {
+					this.totalCacheSize += entry.size;
+				});
+
+				log.debug(() => `已加载缓存索引，共 ${Object.keys(this.cacheIndex).length} 项，总大小 ${Math.round(this.totalCacheSize / 1024 / 1024)}MB`);
+
+				// 检查缓存文件是否实际存在
+				await this.validateCacheFiles();
+
+				// 加载后清理过期缓存
+				await this.cleanCache();
+			} catch (e) {
+				log.error(() => `加载缓存索引失败:`, e);
+				this.cacheIndex = {};
+				this.totalCacheSize = 0;
+			}
+		} else {
+			this.cacheIndex = {};
+			this.totalCacheSize = 0;
+			await this.saveCacheIndex();
+		}
+	}
+
+	/**
+	 * 验证缓存文件是否实际存在，移除不存在的缓存索引
+	 */
+	private async validateCacheFiles(): Promise<void> {
+		const adapter = this.app.vault.adapter;
+		const invalidUrls: string[] = [];
+
+		for (const url in this.cacheIndex) {
+			const entry = this.cacheIndex[url];
+			const filePath = `${this.cacheDir}/${entry.filename}`;
+
+			const exists = await adapter.exists(filePath);
+			if (!exists) {
+				invalidUrls.push(url);
+				this.totalCacheSize -= entry.size;
+				log.debug(() => `缓存文件不存在，从索引中移除: ${url}`);
+			}
+		}
+
+		// 从索引中移除不存在的文件
+		invalidUrls.forEach(url => {
+			delete this.cacheIndex[url];
+		});
+
+		if (invalidUrls.length > 0) {
+			log.debug(() => `移除了 ${invalidUrls.length} 个无效的缓存项`);
+			await this.saveCacheIndex();
+		}
+	}
+
+	/**
+	 * 保存缓存索引
+	 */
+	public async saveCacheIndex() {
+		if (this._isSaving) return;
+
+		this._isSaving = true;
+		let retries = 0;
+		const maxRetries = 3;
+
+		while (retries < maxRetries) {
+			try {
+				await this.ensureCacheDir();
+				const adapter = this.app.vault.adapter;
+				await adapter.write(this.indexFile, JSON.stringify(this.cacheIndex));
+				log.debug(() => `缓存索引保存成功`);
+				break;
+			} catch (e) {
+				retries++;
+				log.error(() => `保存缓存索引失败 (尝试 ${retries}/${maxRetries}):`, e);
+				if (retries >= maxRetries) {
+					break;
+				}
+				// 等待短暂时间后重试
+				await new Promise(resolve => setTimeout(resolve, 500 * retries));
+			}
+		}
+
+		this._isSaving = false;
 	}
 
 	/**
@@ -26,78 +169,188 @@ export class ImageCacheService {
 	async cacheImage(url: string, data: ArrayBuffer, etag?: string, mimeType?: string): Promise<string> {
 		// 检查是否应该缓存此图片
 		if (!this.shouldCacheImage(url, mimeType)) {
-			// 不缓存，但仍然返回base64数据供直接使用
+			// 不缓存，返回base64数据供直接使用
 			return await this.arrayBufferToBase64(data);
 		}
 
-		// 转换为base64
-		const base64Data = await this.arrayBufferToBase64(data);
+		// 检查数据大小，过大的图片不缓存
+		const MAX_SINGLE_IMAGE_SIZE = 20 * 1024 * 1024; // 20MB单图片上限
+		if (data.byteLength > MAX_SINGLE_IMAGE_SIZE) {
+			log.debug(() => `图片 ${url} 过大 (${Math.round(data.byteLength / 1024)}KB)，不缓存`);
+			return await this.arrayBufferToBase64(data);
+		}
 
-		this.cache[url] = {
-			data: base64Data,
-			timestamp: Date.now(),
-			etag: etag
-		};
+		try {
+			// 转换为base64用于返回
+			const base64Data = await this.arrayBufferToBase64(data);
 
-		this.saveCache();
-		return base64Data;
+			// 生成文件名
+			const filename = this.generateFilename(url);
+			const filePath = `${this.cacheDir}/${filename}`;
+
+			// 更新索引
+			this.cacheIndex[url] = {
+				timestamp: Date.now(),
+				etag: etag,
+				filename: filename,
+				size: data.byteLength
+			};
+
+			// 更新总缓存大小
+			this.totalCacheSize += data.byteLength;
+
+			if (this.totalCacheSize > this.maxCacheSize) {
+				await this.cleanCache();
+			}
+
+			await this.app.vault.adapter.writeBinary(filePath, new Uint8Array(data));
+
+			await this.saveCacheIndex();
+
+			log.debug(() => `已将网络图片添加到缓存: ${url}`);
+
+			return base64Data;
+		} catch (error) {
+			log.error(() => `缓存图片 ${url} 失败:`, error);
+			return await this.arrayBufferToBase64(data);
+		}
 	}
 
 	/**
 	 * 从缓存中获取图片
 	 */
-	getCachedImage(url: string): CachedImage | null {
-		const cachedImage = this.cache[url];
+	async getCachedImage(url: string): Promise<CachedImage | null> {
+		const cacheEntry = this.cacheIndex[url];
 
-		if (!cachedImage) {
+		if (!cacheEntry) {
 			return null;
 		}
 
 		// 检查缓存是否过期
-		if (Date.now() - cachedImage.timestamp > this.maxCacheAge) {
-			delete this.cache[url];
-			this.saveCache();
+		if (Date.now() - cacheEntry.timestamp > this.maxCacheAge) {
+			await this.removeCacheEntry(url);
 			return null;
 		}
 
-		return cachedImage;
+		try {
+			const filePath = `${this.cacheDir}/${cacheEntry.filename}`;
+
+			// 检查文件是否存在
+			const exists = await this.app.vault.adapter.exists(filePath);
+			if (!exists) {
+				await this.removeCacheEntry(url);
+				return null;
+			}
+
+			// 读取缓存文件
+			const arrayBuffer = await this.app.vault.adapter.readBinary(filePath);
+			const base64Data = await this.arrayBufferToBase64(arrayBuffer);
+
+			return {
+				data: base64Data,
+				timestamp: cacheEntry.timestamp,
+				etag: cacheEntry.etag
+			};
+		} catch (e) {
+			log.error(() => `读取缓存图片 ${url} 失败:`, e);
+			await this.removeCacheEntry(url);
+			return null;
+		}
 	}
 
 	/**
 	 * 清除过期缓存和超出大小限制的缓存
 	 */
-	cleanCache() {
+	async cleanCache() {
 		const now = Date.now();
-		let totalSize = 0;
-		const urlsByAge: { url: string, timestamp: number }[] = [];
+		const urlsByAge: { url: string, timestamp: number, size: number }[] = [];
 
-		// 先清除过期缓存
-		Object.keys(this.cache).forEach(url => {
-			const cachedImage = this.cache[url];
-			if (now - cachedImage.timestamp > this.maxCacheAge) {
-				delete this.cache[url];
+		// 清除过期缓存并收集有效缓存的信息
+		for (const url of Object.keys(this.cacheIndex)) {
+			const entry = this.cacheIndex[url];
+			if (now - entry.timestamp > this.maxCacheAge) {
+				await this.removeCacheEntry(url);
 			} else {
-				totalSize += cachedImage.data.length * 0.75; // base64编码大约是原始数据的1.33倍，所以这里估算原始大小
-				urlsByAge.push({url, timestamp: cachedImage.timestamp});
-			}
-		});
-
-		// 如果缓存超过最大大小，删除最旧的缓存
-		if (totalSize > this.maxCacheSize && urlsByAge.length > 0) {
-			// 按时间戳排序
-			urlsByAge.sort((a, b) => a.timestamp - b.timestamp);
-
-			// 从最旧的开始删除，直到缓存大小在限制内
-			while (totalSize > this.maxCacheSize * 0.8 && urlsByAge.length > 0) {
-				const oldest = urlsByAge.shift();
-				if (oldest && this.cache[oldest.url]) {
-					totalSize -= this.cache[oldest.url].data.length * 0.75;
-					delete this.cache[oldest.url];
-				}
+				urlsByAge.push({
+					url,
+					timestamp: entry.timestamp,
+					size: entry.size
+				});
 			}
 		}
 
-		this.saveCache();
+		// 如果缓存仍然超过最大大小，删除最旧的缓存
+		if (this.totalCacheSize > this.maxCacheSize && urlsByAge.length > 0) {
+			// 按时间戳排序
+			urlsByAge.sort((a, b) => a.timestamp - b.timestamp);
+
+			// 计算需要释放的空间
+			let spaceToFree = this.totalCacheSize - (this.maxCacheSize * 0.8); // 释放到80%
+			log.debug(() => `缓存超过限制，需要释放 ${Math.round(spaceToFree / 1024 / 1024)}MB 空间`);
+
+			// 从最旧的开始删除，直到释放足够空间
+			for (const entry of urlsByAge) {
+				if (spaceToFree <= 0) break;
+
+				await this.removeCacheEntry(entry.url);
+				spaceToFree -= entry.size;
+			}
+		}
+
+		await this.saveCacheIndex();
+	}
+
+	/**
+	 * 移除单个缓存项
+	 */
+	private async removeCacheEntry(url: string) {
+		try {
+			const entry = this.cacheIndex[url];
+			if (!entry) return;
+
+			const filePath = `${this.cacheDir}/${entry.filename}`;
+
+			// 检查文件是否存在
+			const exists = await this.app.vault.adapter.exists(filePath);
+			if (exists) {
+				await this.app.vault.adapter.remove(filePath);
+			}
+
+			// 更新总缓存大小
+			this.totalCacheSize -= entry.size;
+
+			// 从索引中删除
+			delete this.cacheIndex[url];
+		} catch (e) {
+			log.error(() => `移除缓存项 ${url} 失败:`, e);
+		}
+	}
+
+	/**
+	 * 生成缓存文件名
+	 */
+	private generateFilename(url: string): string {
+		// 使用URL的哈希值作为文件名
+		const hash = this.hashString(url);
+
+		// 从URL获取可能的文件扩展名
+		let ext = this.getFileExtension(url);
+		if (!ext) ext = 'dat';
+
+		return `${hash}.${ext}`;
+	}
+
+	/**
+	 * 计算字符串的哈希值
+	 */
+	private hashString(str: string): string {
+		let hash = 0;
+		for (let i = 0; i < str.length; i++) {
+			const char = str.charCodeAt(i);
+			hash = ((hash << 5) - hash) + char;
+			hash = hash & hash; // 转换为32位整数
+		}
+		return Math.abs(hash).toString(16);
 	}
 
 	/**
@@ -118,102 +371,48 @@ export class ImageCacheService {
 	}
 
 	/**
-	 * 保存缓存到本地存储
+	 * 获取URL的文件扩展名
 	 */
-	private saveCache() {
+	private getFileExtension(url: string): string {
 		try {
-			localStorage.setItem(this.cacheKey, JSON.stringify(this.cache));
-		} catch (e) {
-			console.error('保存图片缓存失败:', e);
-
-			// 如果存储失败（可能是因为超出localStorage限制），则清除一些缓存
-			this.cleanCache();
-			try {
-				localStorage.setItem(this.cacheKey, JSON.stringify(this.cache));
-			} catch (e) {
-				console.error('再次保存图片缓存失败，清空缓存:', e);
-				this.cache = {};
-				localStorage.setItem(this.cacheKey, '{}');
-			}
-		}
-	}
-
-	/**
-	 * 从本地存储加载缓存
-	 */
-	private loadCache() {
-		try {
-			const cachedData = localStorage.getItem(this.cacheKey);
-			if (cachedData) {
-				this.cache = JSON.parse(cachedData);
-				// 加载缓存后立即清理，移除过期项
-				this.cleanCache();
+			// 移除URL中的查询参数
+			const urlWithoutParams = url.split('?')[0];
+			// 获取最后一个.之后的内容作为扩展名
+			const parts = urlWithoutParams.split('.');
+			if (parts.length > 1) {
+				return parts[parts.length - 1].toLowerCase();
 			}
 		} catch (e) {
-			console.error('加载图片缓存失败:', e);
-			this.cache = {};
+			log.error(() => `Error extracting file extension:`, e);
 		}
+		return '';
 	}
 
 	/**
-	 * 获取缓存大小（字节）
+	 * 检查MIME类型是否为静态图片
 	 */
-	getCacheSize(): number {
-		let size = 0;
-		Object.values(this.cache).forEach(cachedImage => {
-			size += cachedImage.data.length * 0.75; // 估算原始大小
-		});
-		return size;
+	private isStaticImageMimeType(mimeType: string): boolean {
+		const staticImageMimeTypes = [
+			'image/jpeg',
+			'image/png',
+			'image/webp',
+			'image/bmp',
+			'image/tiff',
+			'image/svg+xml'
+		];
+		return staticImageMimeTypes.includes(mimeType.toLowerCase());
 	}
 
 	/**
-	 * 清空所有缓存
+	 * 检查文件扩展名是否为静态图片
 	 */
-	clearAllCache() {
-		this.cache = {};
-		this.saveCache();
-	}
-
-	/**
-	 * 设置最大缓存时间
-	 * @param maxAge 最大缓存时间（毫秒）
-	 */
-	setMaxCacheAge(maxAge: number): void {
-		this.maxCacheAge = maxAge;
-		this.cleanCache(); // 立即清理可能的过期缓存
-	}
-
-	/**
-	 * 设置最大缓存大小
-	 * @param maxSize 最大缓存大小（字节）
-	 */
-	setMaxCacheSize(maxSize: number): void {
-		this.maxCacheSize = maxSize;
-		this.cleanCache(); // 立即清理可能超出大小的缓存
-	}
-
-	/**
-	 * 检查是否应该使用缓存
-	 * 如果缓存被禁用，此方法将返回false
-	 */
-	shouldUseCache(): boolean {
-		if (this.shouldUseCacheCallback) {
-			return this.shouldUseCacheCallback();
-		}
-		return true; // 默认启用缓存
-	}
-
-	/**
-	 * 设置缓存启用状态检查回调
-	 */
-	setShouldUseCacheCallback(callback: () => boolean): void {
-		this.shouldUseCacheCallback = callback;
+	private isStaticImageExtension(extension: string): boolean {
+		const staticImageExtensions = ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'tiff', 'tif', 'svg'];
+		return staticImageExtensions.includes(extension.toLowerCase());
 	}
 
 	/**
 	 * 检查是否应该缓存此图片
-	 * @param url 图片URL
-	 * @param mimeType 可选的MIME类型
 	 */
 	shouldCacheImage(url: string, mimeType?: string): boolean {
 		// 如果缓存被全局禁用，直接返回false
@@ -232,43 +431,139 @@ export class ImageCacheService {
 	}
 
 	/**
-	 * 获取URL的文件扩展名
+	 * 检查是否应该使用缓存
 	 */
-	private getFileExtension(url: string): string {
+	shouldUseCache(): boolean {
+		if (this.shouldUseCacheCallback) {
+			return this.shouldUseCacheCallback();
+		}
+		return true; // 默认启用缓存
+	}
+
+	/**
+	 * 设置缓存启用状态检查回调
+	 */
+	setShouldUseCacheCallback(callback: () => boolean): void {
+		this.shouldUseCacheCallback = callback;
+	}
+
+	/**
+	 * 设置最大缓存时间
+	 */
+	setMaxCacheAge(maxAge: number): void {
+		this.maxCacheAge = maxAge;
+		this.cleanCache(); // 立即清理可能的过期缓存
+	}
+
+	/**
+	 * 设置最大缓存大小
+	 */
+	setMaxCacheSize(maxSize: number): void {
+		this.maxCacheSize = maxSize;
+		this.cleanCache(); // 立即清理可能超出大小的缓存
+	}
+
+	/**
+	 * 获取缓存大小（字节）
+	 */
+	getCacheSize(): number {
+		return this.totalCacheSize;
+	}
+
+	/**
+	 * 清空所有缓存
+	 */
+	async clearAllCache() {
 		try {
-			// 移除URL中的查询参数
-			const urlWithoutParams = url.split('?')[0];
-			// 获取最后一个.之后的内容作为扩展名
-			const parts = urlWithoutParams.split('.');
-			if (parts.length > 1) {
-				return parts[parts.length - 1].toLowerCase();
+			// 清除所有缓存文件
+			for (const url of Object.keys(this.cacheIndex)) {
+				await this.removeCacheEntry(url);
+			}
+
+			await this.cleanupOrphanedFiles();
+
+			// 重置索引和总大小
+			this.cacheIndex = {};
+			this.totalCacheSize = 0;
+
+			// 保存空索引
+			await this.saveCacheIndex();
+
+			log.debug(() => `所有缓存已清除`);
+		} catch (e) {
+			log.error(() => `清除所有缓存失败:`, e);
+		}
+	}
+
+	/**
+	 * 清理孤立的缓存文件（目录中存在但索引中没有的文件）
+	 */
+	async cleanupOrphanedFiles(): Promise<void> {
+		try {
+			const adapter = this.app.vault.adapter;
+
+			// 获取缓存目录中的所有文件
+			const cacheFiles = await this.listCacheDirectoryFiles();
+
+			// 创建一个基于索引的有效文件名集合
+			const validFilenames = new Set<string>();
+			for (const url in this.cacheIndex) {
+				validFilenames.add(this.cacheIndex[url].filename);
+			}
+
+			// 查找孤立文件（目录中存在但索引中没有的文件）
+			const orphanedFiles: string[] = [];
+			for (const filename of cacheFiles) {
+				if (!validFilenames.has(filename)) {
+					orphanedFiles.push(filename);
+				}
+			}
+
+			// 删除孤立文件
+			for (const filename of orphanedFiles) {
+				const filePath = `${this.cacheDir}/${filename}`;
+				try {
+					await adapter.remove(filePath);
+					log.debug(() => `已删除孤立的缓存文件: ${filename}`);
+				} catch (e) {
+					log.error(() => `删除孤立的缓存文件失败: ${filename}`, e);
+				}
+			}
+
+			if (orphanedFiles.length > 0) {
+				log.debug(() => `共删除了 ${orphanedFiles.length} 个孤立的缓存文件`);
 			}
 		} catch (e) {
-			console.error('Error extracting file extension:', e);
+			log.error(() => `清理孤立文件失败:`, e);
 		}
-		return '';
 	}
 
 	/**
-	 * 检查文件扩展名是否为静态图片
+	 * 列出缓存目录中的所有文件
+	 * @returns 缓存目录中的文件名数组
 	 */
-	private isStaticImageExtension(extension: string): boolean {
-		const staticImageExtensions = ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'tiff', 'tif', 'svg'];
-		return staticImageExtensions.includes(extension.toLowerCase());
-	}
+	private async listCacheDirectoryFiles(): Promise<string[]> {
+		try {
+			// 方法1: 如果适配器有list方法（可能不是所有适配器都有）
+			if (typeof this.app.vault.adapter.list === 'function') {
+				const { files } = await this.app.vault.adapter.list(this.cacheDir);
+				return files.map(filePath => {
+					// 从完整路径中提取文件名
+					const parts = filePath.split('/');
+					return parts[parts.length - 1];
+				});
+			}
 
-	/**
-	 * 检查MIME类型是否为静态图片
-	 */
-	private isStaticImageMimeType(mimeType: string): boolean {
-		const staticImageMimeTypes = [
-			'image/jpeg',
-			'image/png',
-			'image/webp',
-			'image/bmp',
-			'image/tiff',
-			'image/svg+xml'
-		];
-		return staticImageMimeTypes.includes(mimeType.toLowerCase());
+			// 方法2: 替代方法 - 使用TFile对象
+			const allFiles = this.app.vault.getFiles();
+			const cacheFiles = allFiles.filter(file => {
+				return file.path.startsWith(this.cacheDir + '/');
+			});
+
+			return cacheFiles.map(file => file.name);
+		} catch (e) {
+			log.error(() => `列出缓存目录文件失败:`, e);
+			return [];
+		}
 	}
 }

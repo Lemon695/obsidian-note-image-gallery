@@ -1,6 +1,6 @@
 import {App, Modal, Notice, TFile} from 'obsidian';
 import NoteImageGalleryPlugin from "../main";
-import {IncomingMessage} from 'http';
+import {log} from "../utils/log-utils";
 
 interface ImageRequest {
 	controller?: AbortController;
@@ -52,7 +52,6 @@ export class CurrentNoteImageGalleryService extends Modal {
 		contentEl.empty();
 		contentEl.addClass('current-note-image-gallery');
 
-		// 顶部工具栏
 		const toolbar = contentEl.createDiv('modal-toolbar');
 		const titleEl = toolbar.createDiv('modal-title');
 		titleEl.setText(`图片墙 (${this.totalImages} 张图片)`);
@@ -68,10 +67,8 @@ export class CurrentNoteImageGalleryService extends Modal {
 		const progressText = progressContainer.createDiv('progress-text');
 		progressText.setText(`0/${this.totalImages}`);
 
-		// 筛选和排序工具栏
 		const filterToolbar = toolbar.createDiv('filter-toolbar');
 
-		// 创建排序下拉菜单
 		const sortContainer = filterToolbar.createDiv('sort-container');
 		sortContainer.createSpan({text: '排序: '});
 		const sortSelect = sortContainer.createEl('select', {cls: 'sort-select'});
@@ -79,26 +76,21 @@ export class CurrentNoteImageGalleryService extends Modal {
 		sortSelect.createEl('option', {text: '按尺寸（大到小）', value: 'size-desc'});
 		sortSelect.createEl('option', {text: '按尺寸（小到大）', value: 'size-asc'});
 
-		// 创建筛选按钮
 		const filterContainer = filterToolbar.createDiv('filter-container');
 		filterContainer.createSpan({text: '筛选: '});
 		const allBtn = filterContainer.createEl('button', {text: '全部', cls: 'filter-btn active'});
 		const localBtn = filterContainer.createEl('button', {text: '本地图片', cls: 'filter-btn'});
 		const remoteBtn = filterContainer.createEl('button', {text: '网络图片', cls: 'filter-btn'});
 
-		// 处理排序逻辑
 		sortSelect.addEventListener('change', () => {
 			this.sortImages(sortSelect.value);
 		});
 
-		// 处理筛选逻辑
 		[allBtn, localBtn, remoteBtn].forEach(btn => {
 			btn.addEventListener('click', (e) => {
-				// 更新按钮状态
 				[allBtn, localBtn, remoteBtn].forEach(b => b.removeClass('active'));
 				btn.addClass('active');
 
-				// 应用筛选
 				const filter = btn.textContent?.toLowerCase() || 'all';
 				this.filterImages(filter);
 			});
@@ -136,7 +128,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 				}
 			});
 		}, {
-			rootMargin: '200px', // 提前200px加载图片
+			rootMargin: '200px',
 			threshold: 0.01
 		});
 	}
@@ -144,7 +136,6 @@ export class CurrentNoteImageGalleryService extends Modal {
 	private setupBatchLoading() {
 		const MAX_CONCURRENT_LOADS = 5;
 		const MAX_RETRIES = 3;
-		const MAX_NON_WEIBO_RETRIES = 5;  // 非微博图片的最大重试次数
 		const loadQueue: Array<{ path: string, retries: number }> = [];
 		let activeLoads = 0;
 		let isProcessingQueue = false;
@@ -167,127 +158,75 @@ export class CurrentNoteImageGalleryService extends Modal {
 					activeLoads++;
 					imageData.isLoading = true;
 
-					// 判断图片类型
+					// 是否为网络图片，以及是否为微博图片
+					const isNetworkImage = path.startsWith('http');
 					const isWeiboImage = path.includes('.sinaimg.cn');
-					const isNonWeiboNetworkImage = path.startsWith('http') && !isWeiboImage;
-					console.log(`队列处理图片: ${path}, 是否微博图片: ${isWeiboImage}, 是否其他网络图片: ${isNonWeiboNetworkImage}, 当前活跃加载: ${activeLoads}`);
 
-					// 使用 Promise 的方式处理图片加载，确保无论成功或失败都会更新计数
+					log.debug(() => `队列处理图片: ${path}, 是否网络图片: ${isNetworkImage}, 是否微博图片: ${isWeiboImage}, 当前活跃加载: ${activeLoads}`);
+
 					try {
-						if (isWeiboImage) {
-							// 特殊处理微博图片
-							await new Promise<void>((resolve, reject) => {
-								setTimeout(async () => {
-									try {
-										const imgEl = imageData.element.querySelector('img') || imageData.element.createEl('img');
-										const loadingTextEl = imageData.element.querySelector('.loading-text') ||
-											imageData.element.createDiv('loading-text');
+						await new Promise<void>((resolve, reject) => {
+							setTimeout(async () => {
+								try {
+									const imgEl = imageData.element.querySelector('img') || imageData.element.createEl('img');
+									const loadingTextEl = imageData.element.querySelector('.loading-text') ||
+										imageData.element.createDiv('loading-text');
+									loadingTextEl.setText('加载中...');
 
-										await this.loadWeiboImage(
-											path,
-											imgEl as HTMLImageElement,
-											imageData.element,
-											loadingTextEl as HTMLElement
-										);
-										resolve();
-									} catch (error) {
-										console.error(`微博图片加载失败: ${path}`, error);
-										reject(error);
-									} finally {
-										// 确保减少活跃计数
-										activeLoads--;
-										imageData.isLoading = false;
-										console.log(`微博图片处理完成，当前活跃加载: ${activeLoads}`);
+									// 统一使用通用图片加载方法，但传入微博图片标志
+									await this.loadImageUnified(path, imgEl as HTMLImageElement, imageData.element, loadingTextEl as HTMLElement, isWeiboImage);
+									resolve();
+								} catch (error) {
+									log.error(() => `加载图片 ${path} 时出错:`, error);
+
+									if (retries < MAX_RETRIES) {
+										log.debug(() => `将图片 ${path} 排队重试 ${retries + 1}/${MAX_RETRIES}`);
+										loadQueue.push({path, retries: retries + 1});
+									} else {
+										imageData.hasError = true;
+										this.handleImageError(imageData.element, '加载失败');
+										this.loadedImages++;
+										this.updateProgressBar();
 									}
-								}, 0);
-							});
-						} else if (isNonWeiboNetworkImage) {
-							// 优化处理非微博网络图片
-							await new Promise<void>((resolve, reject) => {
-								setTimeout(async () => {
-									try {
-										const imgEl = imageData.element.querySelector('img') || imageData.element.createEl('img');
-										const loadingTextEl = imageData.element.querySelector('.loading-text') ||
-											imageData.element.createDiv('loading-text');
-										loadingTextEl.setText('加载中...');
-
-										await this.loadRegularImage(path, imgEl as HTMLImageElement, imageData.element, loadingTextEl as HTMLElement);
-										resolve();
-									} catch (error) {
-										console.error(`加载图片 ${path} 时出错:`, error);
-
-										if (retries < MAX_RETRIES) {
-											console.log(`将图片 ${path} 排队重试 ${retries + 1}/${MAX_RETRIES}`);
-											loadQueue.push({path, retries: retries + 1});
-										} else {
-											imageData.hasError = true;
-											this.handleImageError(imageData.element, '加载失败');
-											this.loadedImages++;
-											this.updateProgressBar();
-										}
-										reject(error);
-									} finally {
-										// 确保减少活跃计数
-										activeLoads--;
-										imageData.isLoading = false;
-										console.log(`标准图片处理完成，当前活跃加载: ${activeLoads}`);
-									}
-								}, 0);
-							});
-						} else {
-							// 标准图片加载处理（本地图片）
-							await new Promise<void>((resolve, reject) => {
-								setTimeout(async () => {
-									try {
-										await this.loadImage(path, imageData.element);
-										resolve();
-									} catch (error) {
-										console.error(`加载图片 ${path} 时出错:`, error);
-
-										if (retries < MAX_RETRIES) {
-											console.log(`将图片 ${path} 排队重试 ${retries + 1}/${MAX_RETRIES}`);
-											loadQueue.push({path, retries: retries + 1});
-										} else {
-											imageData.hasError = true;
-											this.handleImageError(imageData.element, '加载失败');
-											this.loadedImages++;
-											this.updateProgressBar();
-										}
-										reject(error);
-									} finally {
-										// 确保减少活跃计数
-										activeLoads--;
-										imageData.isLoading = false;
-										console.log(`标准图片处理完成，当前活跃加载: ${activeLoads}`);
-									}
-								}, 0);
-							});
-						}
+									reject(error);
+								} finally {
+									// 确保减少活跃计数
+									activeLoads--;
+									imageData.isLoading = false;
+									log.debug(() => `图片处理完成，当前活跃加载: ${activeLoads}`);
+								}
+							}, 0);
+						});
 					} catch (error) {
-						// 这里处理的是整个 Promise 的失败，可以记录日志但不需要额外操作
-						// 因为内部已经处理了 activeLoads 和 imageData.isLoading
-						console.error(`图片加载失败处理: ${path}`, error);
+						log.error(() => `图片加载失败处理: ${path}`, error);
 					}
 				}
 			} finally {
 				isProcessingQueue = false;
 
-				// 延迟检查队列，确保状态已更新
-				setTimeout(() => {
-					if (loadQueue.length > 0 && activeLoads < MAX_CONCURRENT_LOADS) {
-						processQueue();
+				const checkQueueStatus = () => {
+					// 如果队列不为空但无活跃加载，并且未在处理中，尝试重启处理
+					if (loadQueue.length > 0 && activeLoads === 0 && !isProcessingQueue) {
+						log.debug(() => `队列处理可能停滞，尝试重启`);
+						setTimeout(processQueue, 100);
 					}
-				}, 50);
+				};
+
+				// 立即检查一次
+				checkQueueStatus();
+
+				if (loadQueue.length > 0) {
+					setTimeout(checkQueueStatus, 500);
+				}
 			}
 		};
-
 		this.queueImageLoad = (imagePath: string) => {
 			const imageData = this.imageDataMap.get(imagePath);
 			if (!imageData) return;
 
 			if (!imageData.isLoading && !imageData.hasError &&
 				!loadQueue.some(item => item.path === imagePath)) {
-				console.log(`将图片加入队列: ${imagePath}, 当前队列长度: ${loadQueue.length}, 当前活跃加载: ${activeLoads}`);
+				log.debug(() => `将图片加入队列: ${imagePath}, 当前队列长度: ${loadQueue.length}, 当前活跃加载: ${activeLoads}`);
 				loadQueue.push({path: imagePath, retries: 0});
 				setTimeout(processQueue, 0);
 			}
@@ -295,11 +234,11 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 		const queueMonitor = setInterval(() => {
 			if (loadQueue.length > 0 || activeLoads > 0) {
-				console.log(`队列监控 - 队列长度: ${loadQueue.length}, 活跃加载: ${activeLoads}, 是否处理中: ${isProcessingQueue}`);
+				log.debug(() => `队列监控 - 队列长度: ${loadQueue.length}, 活跃加载: ${activeLoads}, 是否处理中: ${isProcessingQueue}`);
 
 				// 如果队列有内容但没有活跃加载，并且未处理中，尝试重启队列处理
 				if (loadQueue.length > 0 && activeLoads === 0 && !isProcessingQueue) {
-					console.log('队列似乎卡住了，尝试重启处理');
+					log.debug(() => '队列似乎卡住了，尝试重启处理');
 					setTimeout(processQueue, 100);
 				}
 			}
@@ -347,10 +286,8 @@ export class CurrentNoteImageGalleryService extends Modal {
 			const currentFilter = activeFilterBtn ? activeFilterBtn.textContent?.toLowerCase() : 'all';
 
 			this.imageDataMap.forEach((data) => {
-				// 如果还没有位置信息，跳过
 				if (!data.position) return;
 
-				// 检查是否应该基于筛选条件显示
 				const imagePath = data.path;
 				const isRemote = imagePath.startsWith('http://') || imagePath.startsWith('https://');
 				const matchesFilter =
@@ -358,9 +295,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 					((currentFilter === '本地图片' || currentFilter === 'local') && !isRemote) ||
 					((currentFilter === '网络图片' || currentFilter === 'remote') && isRemote);
 
-				// 首先处理筛选条件
 				if (!matchesFilter) {
-					// 不符合筛选条件，直接隐藏
 					data.element.style.display = 'none';
 					return;
 				}
@@ -382,7 +317,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 					const images = Array.from(data.element.querySelectorAll('img'));
 					images.forEach(imgEl => {
 						if (imgEl.complete && imgEl.naturalWidth > 0 && imgEl.style.opacity !== '1') {
-							console.log(`修复未显示的图片: ${data.path}`);
+							log.debug(() => `修复未显示的图片: ${data.path}`);
 							imgEl.style.opacity = '1';
 							imgEl.setAttribute('complete', 'true');
 							imgEl.classList.add('loaded');
@@ -394,14 +329,45 @@ export class CurrentNoteImageGalleryService extends Modal {
 					data.element.style.visibility = 'hidden';
 				}
 			});
+
+			window.requestAnimationFrame(() => {
+				this.imageDataMap.forEach((data) => {
+					if (!data.position) return;
+
+					// 再次检查是否在可视区域内
+					const isNowVisible = data.position.bottom >= viewportTop &&
+						data.position.top <= viewportBottom;
+
+					if (isNowVisible && data.element.style.display !== 'none') {
+						// 确保元素可见
+						data.element.style.visibility = '';
+
+						// 确保图片加载并显示
+						const images = Array.from(data.element.querySelectorAll('img'));
+						images.forEach(imgEl => {
+							if (imgEl.complete && imgEl.naturalWidth > 0 &&
+								(imgEl.style.opacity !== '1' || !imgEl.classList.contains('loaded'))) {
+								log.debug(() => `在动画帧中修复未显示的图片: ${data.path}`);
+								imgEl.style.opacity = '1';
+								imgEl.classList.add('loaded');
+							}
+						});
+					}
+				});
+			});
 		};
 
-		// 添加事件监听器
+		// 添加周期性位置更新
+		const positionUpdateInterval = setInterval(() => {
+			updateElementPositions();
+			scrollHandler(); // 重新检查图片可见性
+		}, 2000); // 每2秒更新一次位置信息
+
 		container.addEventListener('scroll', scrollHandler);
 		window.addEventListener('resize', updateElementPositions);
 
-		// 保存清理函数到实例，以便在onClose中调用
 		this.cleanupVirtualScroll = () => {
+			clearInterval(positionUpdateInterval);
 			container.removeEventListener('scroll', scrollHandler);
 			window.removeEventListener('resize', updateElementPositions);
 		};
@@ -411,7 +377,6 @@ export class CurrentNoteImageGalleryService extends Modal {
 		const container = this.contentEl.querySelector('.image-wall');
 		if (!container) return;
 
-		// 获取所有图片元素
 		const items = Array.from(container.querySelectorAll('.image-item'));
 
 		// 根据排序类型排序
@@ -491,9 +456,6 @@ export class CurrentNoteImageGalleryService extends Modal {
 			hasError: false
 		});
 
-		// 添加占位符
-		const placeholder = imageDiv.createDiv('image-placeholder');
-
 		// 监听此元素以实现懒加载
 		this.intersectionObserver?.observe(imageDiv);
 
@@ -503,7 +465,6 @@ export class CurrentNoteImageGalleryService extends Modal {
 			this.createLightboxWithNavigation(currentIndex);
 		});
 
-		// 添加右键菜单
 		imageDiv.addEventListener('contextmenu', (e) => {
 			e.preventDefault();
 			const img = imageDiv.querySelector('img');
@@ -513,425 +474,401 @@ export class CurrentNoteImageGalleryService extends Modal {
 		});
 	}
 
-	private async loadImage(imagePath: string, imageDiv: HTMLElement) {
-		const imageData = this.imageDataMap.get(imagePath);
-		if (!imageData || imageData.isLoading) return;
-
-		imageData.isLoading = true;
-
-		try {
-			// 创建图片元素（如果尚不存在）
-			let img = imageDiv.querySelector('img') as HTMLImageElement;
-			if (!img) {
-				img = imageDiv.createEl('img');
-			}
-
-			const loadingText = imageDiv.querySelector('.loading-text') || imageDiv.createDiv('loading-text');
-			loadingText.setText('加载中...');
-
-			// 检查是否为微博图片
-			const isWeiboImage = imagePath.includes('.sinaimg.cn');
-
-			if (isWeiboImage) {
-				await this.loadWeiboImage(imagePath, img, imageDiv, loadingText as HTMLElement);
-			} else {
-				await this.loadRegularImage(imagePath, img, imageDiv, loadingText as HTMLElement);
-			}
-		} catch (error) {
-			console.error('Error processing image:', error);
-			this.loadedImages++;
-			this.updateProgressBar();
-			this.handleImageError(imageDiv, '处理失败');
-
-			if (imageData) {
-				imageData.hasError = true;
-				imageData.isLoading = false;
-			}
-		}
-	}
-
-	private async loadRegularImage(
+	private async loadLocalImageEnhanced(
 		imagePath: string,
 		img: HTMLImageElement,
 		imageDiv: HTMLElement,
 		loadingText: HTMLElement
 	): Promise<void> {
 		return new Promise((resolve, reject) => {
-			const imageData = this.imageDataMap.get(imagePath);
-			if (!imageData) {
-				reject(new Error('Image data not found'));
-				return;
-			}
+			log.debug(() => `增强型本地图片加载: ${imagePath}`);
 
-			const cachedImage = this.plugin.imageCacheService.getCachedImage(imagePath);
-			if (cachedImage) {
-				console.log(`Loading image from cache: ${imagePath}`);
-
-				// 从缓存加载
-				img.onload = () => {
-					this.handleImageLoadSuccess(img, imageDiv, loadingText, imagePath);
-					resolve();
-				};
-
-				img.onerror = (e) => {
-					console.error('Cached image load error:', e);
-					// 缓存加载失败，回退到使用objectURL加载
-					this.loadNonWeiboImageWithObjectURL(imagePath, img, imageDiv, loadingText, resolve, reject);
-				};
-
-				// 设置图片源为缓存的base64数据
-				img.src = cachedImage.data;
-				return;
-			}
-
-			// 没有缓存，使用objectURL方式加载
-			this.loadNonWeiboImageWithObjectURL(imagePath, img, imageDiv, loadingText, resolve, reject);
-		});
-	}
-
-	private async loadNonWeiboImageWithObjectURL(
-		imagePath: string,
-		img: HTMLImageElement,
-		imageDiv: HTMLElement,
-		loadingText: HTMLElement,
-		resolve: () => void,
-		reject: (error: any) => void
-	): Promise<void> {
-		console.log(`使用objectURL加载非微博图片: ${imagePath}`);
-
-		try {
-			// 判断是网络图片还是本地图片
-			if (imagePath.startsWith('http://') || imagePath.startsWith('https://')) {
-				// 网络图片使用fetch
-				try {
-					const response = await fetch(imagePath, {
-						method: 'GET',
-						credentials: 'omit',
-						cache: 'no-cache',
-						headers: {
-							'Cache-Control': 'no-cache',
-							'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8'
-						}
-					});
-
-					if (!response.ok) {
-						throw new Error(`HTTP error: ${response.status}`);
-					}
-
-					const blob = await response.blob();
-					const objectUrl = URL.createObjectURL(blob);
-
-					// 清理旧的objectURL
-					const oldObjectUrl = imageDiv.getAttribute('data-object-url');
-					if (oldObjectUrl) {
-						URL.revokeObjectURL(oldObjectUrl);
-					}
-
-					// 保存新的objectURL引用
-					imageDiv.setAttribute('data-object-url', objectUrl);
-
-					img.onload = () => {
-						this.handleImageLoadSuccess(img, imageDiv, loadingText, imagePath);
-						resolve();
-					};
-
-					img.onerror = (e) => {
-						console.error('从objectURL加载图片失败:', imagePath);
-						URL.revokeObjectURL(objectUrl);
-						this.handleImageError(imageDiv, '加载失败');
-						this.loadedImages++;
-						this.updateProgressBar();
-						reject(e);
-					};
-
-					// 设置图片源为objectURL
-					img.src = objectUrl;
-
-					// 尝试缓存图片数据
-					this.plugin.imageCacheService.cacheImage(
-						imagePath,
-						await blob.arrayBuffer(),
-						undefined,
-						blob.type || undefined
-					).catch(e => console.error('缓存图片失败:', e));
-
-				} catch (error) {
-					console.error('获取网络图片失败，尝试直接加载:', error);
-					// 如果fetch失败，回退到直接设置src
-					this.loadNonWeiboImageDirectly(imagePath, img, imageDiv, loadingText, resolve, reject);
-				}
-			} else {
-				// 本地图片
-				this.loadNonWeiboImageDirectly(imagePath, img, imageDiv, loadingText, resolve, reject);
-			}
-		} catch (error) {
-			console.error('处理非微博图片失败:', error);
-			reject(error);
-		}
-	}
-
-	private loadNonWeiboImageDirectly(
-		imagePath: string,
-		img: HTMLImageElement,
-		imageDiv: HTMLElement,
-		loadingText: HTMLElement,
-		resolve: () => void,
-		reject: (error: any) => void
-	): void {
-		console.log(`直接加载非微博图片: ${imagePath}`);
-
-		img.onload = () => {
-			console.log(`非微博图片直接加载成功: ${imagePath}`);
-			this.handleImageLoadSuccess(img, imageDiv, loadingText, imagePath);
-			resolve();
-		};
-
-		img.onerror = (e) => {
-			console.error(`非微博图片直接加载失败: ${imagePath}`);
-			this.handleImageError(imageDiv, '加载失败');
-			this.loadedImages++;
-			this.updateProgressBar();
-			reject(e);
-		};
-
-		if (!imagePath.startsWith('http://') && !imagePath.startsWith('https://')) {
-			// 本地图片
-			const realPath = this.getLinkPath(imagePath);
-			if (!realPath) {
-				this.handleImageError(imageDiv, '找不到图片');
-				this.loadedImages++;
-				this.updateProgressBar();
-				reject(new Error('Image path not found'));
-				return;
-			}
-			img.src = this.getResourcePath(realPath);
-		} else {
-			// 网络图片
-			img.src = imagePath;
-		}
-	}
-
-	private loadImageWithoutCache(
-		imagePath: string,
-		img: HTMLImageElement,
-		imageDiv: HTMLElement,
-		loadingText: HTMLElement,
-		resolve: () => void,
-		reject: (error: any) => void
-	): void {
-		const controller = new AbortController();
-		const requestId = Date.now().toString();
-
-		// 保存请求数据
-		this.currentRequests.set(requestId, {
-			controller,
-			timestamp: Date.now()
-		});
-
-		imageDiv.setAttribute('data-request-id', requestId);
-
-		// 关键修改：为非微博网络图片添加明确的加载事件处理
-		const isNonWeiboNetworkImage = imagePath.startsWith('http') && !imagePath.includes('.sinaimg.cn');
-
-		// 设置图片加载处理程序
-		img.onload = () => {
-			console.log(`图片加载成功: ${imagePath}`);
-			this.handleImageLoadSuccess(img, imageDiv, loadingText, imagePath);
-			this.currentRequests.delete(requestId);
-			resolve();
-		};
-
-		img.onerror = async (e) => {
-			console.error('图片加载错误:', imagePath);
-
-			// 如果尚未尝试，先使用 CORS
-			if (!img.crossOrigin && (imagePath.startsWith('http://') || imagePath.startsWith('https://'))) {
-				console.log('使用 CORS 重试:', imagePath);
-				img.crossOrigin = 'anonymous';
-				img.src = imagePath;
-				return;
-			}
-
-			// 如果到达这里，重试失败或不适用
-			this.handleImageError(imageDiv, '加载失败');
-			this.loadedImages++;
-			this.updateProgressBar();
-
-			// 更新图片数据
-			const imageData = this.imageDataMap.get(imagePath);
-			if (imageData) {
-				imageData.isLoading = false;
-				imageData.hasError = true;
-			}
-
-			this.currentRequests.delete(requestId);
-			reject(e);
-		};
-
-		// 关键修改：针对非微博网络图片使用专门的加载逻辑
-		if (isNonWeiboNetworkImage) {
-			console.log(`使用直接加载方式加载非微博网络图片: ${imagePath}`);
-
-			// 创建一个新的Image对象预加载图片
-			const preloadImg = new Image();
-			preloadImg.crossOrigin = "anonymous";
-
-			preloadImg.onload = () => {
-				// 预加载成功后，设置到DOM中的img元素
-				console.log(`非微博图片预加载成功: ${imagePath}`);
-				img.src = imagePath;
-			};
-
-			preloadImg.onerror = () => {
-				// 预加载失败，尝试直接设置
-				console.log(`非微博图片预加载失败，直接设置src: ${imagePath}`);
-				img.src = imagePath;
-			};
-
-			// 开始预加载
-			preloadImg.src = imagePath;
-		} else if (imagePath.startsWith('http://') || imagePath.startsWith('https://')) {
-			// 对于微博图片和其他特殊网络图片，继续使用原有的缓存方法
-			this.fetchAndCacheImage(imagePath, img);
-		} else {
-			// 本地图片处理
-			const realPath = this.getLinkPath(imagePath);
-			if (!realPath) {
-				this.handleImageError(imageDiv, '找不到图片');
-				this.loadedImages++;
-				this.updateProgressBar();
+			img.onload = () => {
+				log.debug(() => `本地图片加载成功: ${imagePath}`);
+				this.handleImageLoadSuccess(img, imageDiv, loadingText, imagePath);
 
 				const imageData = this.imageDataMap.get(imagePath);
 				if (imageData) {
 					imageData.isLoading = false;
-					imageData.hasError = true;
 				}
 
-				this.currentRequests.delete(requestId);
-				reject(new Error('Image path not found'));
-				return;
+				resolve();
+			};
+
+			img.onerror = async (e) => {
+				log.error(() => `本地图片加载失败 (${img.src}): ${imagePath}`);
+
+				try {
+					const alternativePaths = await this.plugin.imageLoader.getAlternativeLocalPaths(imagePath);
+					for (const path of alternativePaths) {
+						log.debug(() => `尝试替代路径: ${path}`);
+
+						const success = await this.plugin.imageLoader.loadLocalImage(path, img);
+						if (success) {
+							// 加载成功，等待onload事件处理
+							return;
+						}
+					}
+
+					this.handleImageError(imageDiv, '找不到图片');
+					this.loadedImages++;
+					this.updateProgressBar();
+
+					// 更新图片数据状态
+					const imageData = this.imageDataMap.get(imagePath);
+					if (imageData) {
+						imageData.hasError = true;
+						imageData.isLoading = false;
+					}
+
+					reject(e);
+				} catch (error) {
+					log.error(() => `处理替代路径时出错:`, error);
+
+					// 显示错误
+					this.handleImageError(imageDiv, '处理失败');
+					this.loadedImages++;
+					this.updateProgressBar();
+
+					const imageData = this.imageDataMap.get(imagePath);
+					if (imageData) {
+						imageData.hasError = true;
+						imageData.isLoading = false;
+					}
+
+					reject(error);
+				}
+			};
+
+			this.plugin.imageLoader.loadLocalImage(imagePath, img)
+				.then(success => {
+					if (!success) {
+						// 如果加载失败，回退到标准方法
+						img.src = this.plugin.imageLoader.getResourcePath(imagePath);
+					}
+				})
+				.catch(error => {
+					log.error(() => `加载器加载失败，回退到标准方法: ${imagePath}`, error);
+					img.src = this.plugin.imageLoader.getResourcePath(imagePath);
+				});
+		});
+	}
+
+	private async tryAdvancedImageLoading(
+		imagePath: string,
+		img: HTMLImageElement,
+		imageDiv: HTMLElement,
+		loadingText: HTMLElement,
+		resolve: () => void,
+		reject: (error: any) => void,
+		isWeiboImage: boolean = false
+	): Promise<void> {
+		let isNetworkImage = false;
+		try {
+			isNetworkImage = imagePath.startsWith('http://') || imagePath.startsWith('https://');
+
+			if (isNetworkImage) {
+				// 尝试使用Obsidian的图片加载器（对于非微博图片非常有效）
+				if (!isWeiboImage) {
+					const success = await this.plugin.imageLoader.loadNetworkImage(imagePath, img);
+					if (success) {
+						img.onload = () => {
+							this.handleImageLoadSuccess(img, imageDiv, loadingText, imagePath);
+							resolve();
+						};
+
+						img.onerror = (e) => {
+							log.error(() => `Obsidian加载器加载失败: ${imagePath}`);
+							// 继续尝试其他方法
+						};
+
+						return; // 给Obsidian加载器一个机会
+					}
+				}
+
+				await this.loadWithCustomFetch(imagePath, img, imageDiv, loadingText, resolve, reject, isWeiboImage);
+			} else {
+				// 本地图片
+				await this.loadLocalImageEnhanced(imagePath, img, imageDiv, loadingText);
+				resolve();
 			}
-			img.src = this.getResourcePath(realPath);
+		} catch (error) {
+			log.error(() => `高级加载尝试失败: ${imagePath}`, error);
+
+			// 最后的回退方案 - 直接设置URL
+			if (isNetworkImage) {
+				this.loadImageDirectly(imagePath, img, imageDiv, loadingText, resolve, reject, isWeiboImage);
+			} else {
+				reject(error);
+			}
 		}
 	}
 
-	private async fetchAndLoadImage(imagePath: string, img: HTMLImageElement): Promise<void> {
+	private async loadWithCustomFetch(
+		imagePath: string,
+		img: HTMLImageElement,
+		imageDiv: HTMLElement,
+		loadingText: HTMLElement,
+		resolve: () => void,
+		reject: (error: any) => void,
+		isWeiboImage: boolean = false
+	): Promise<void> {
 		try {
-			// 设置较短的超时时间
 			const controller = new AbortController();
-			const timeoutId = setTimeout(() => controller.abort(), 10000);
+			// 减少超时时间
+			const timeoutId = setTimeout(() => controller.abort(), 1500);
 
-			// 使用 fetch 加载图片并创建 objectURL 直接显示
-			const response = await fetch(imagePath, {
+			const fetchOptions: RequestInit = {
 				method: 'GET',
-				credentials: 'omit',  // 不发送凭证
-				cache: 'no-cache',    // 不使用缓存
+				credentials: 'omit',
+				cache: 'no-cache',
 				signal: controller.signal,
 				headers: {
-					'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
 					'Cache-Control': 'no-cache',
-					// 添加一些常见的请求头，模拟浏览器行为
-					'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+					'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
+					'Referer': isWeiboImage ? 'https://weibo.com/' : 'https://obsidian.md/'
 				}
-			});
+			};
 
+			const response = await fetch(imagePath, fetchOptions);
 			clearTimeout(timeoutId);
 
 			if (!response.ok) {
 				throw new Error(`HTTP error: ${response.status}`);
 			}
 
-			// 获取图片数据并创建 blob URL
 			const blob = await response.blob();
 			const objectUrl = URL.createObjectURL(blob);
 
-			// 记录创建的对象 URL 以便后续清理
-			img.setAttribute('data-object-url', objectUrl);
+			const oldObjectUrl = imageDiv.getAttribute('data-object-url');
+			if (oldObjectUrl) {
+				URL.revokeObjectURL(oldObjectUrl);
+			}
+
+			imageDiv.setAttribute('data-object-url', objectUrl);
+
+			img.onload = () => {
+				this.handleImageLoadSuccess(img, imageDiv, loadingText, imagePath);
+				resolve();
+			};
+
+			img.onerror = (e) => {
+				log.error(() => `从objectURL加载图片失败:${imagePath}`);
+				URL.revokeObjectURL(objectUrl);
+				// 最后一次尝试直接加载
+				this.loadImageDirectly(imagePath, img, imageDiv, loadingText, resolve, reject, isWeiboImage);
+			};
+
 			img.src = objectUrl;
 
-			// 尝试在后台异步缓存图片，但不等待这个过程
-			this.tryToStoreImageInCache(imagePath, blob).catch(e => {
-				console.log('图片缓存失败(不影响显示):', e);
-			});
-
-		} catch (error) {
-			console.error('Fetch加载图片失败:', error);
-			throw error;  // 重新抛出错误以便调用者处理
-		}
-	}
-
-// 辅助方法：尝试将图片存入缓存
-	private async tryToStoreImageInCache(imagePath: string, blob: Blob): Promise<void> {
-		try {
-			// 转换 blob 为 arrayBuffer
-			const arrayBuffer = await blob.arrayBuffer();
-
-			// 根据图片类型确定 MIME 类型
-			let mimeType = 'image/jpeg';  // 默认类型
-			if (imagePath.toLowerCase().endsWith('.png')) {
-				mimeType = 'image/png';
-			} else if (imagePath.toLowerCase().endsWith('.gif')) {
-				mimeType = 'image/gif';
-			} else if (imagePath.toLowerCase().endsWith('.webp')) {
-				mimeType = 'image/webp';
-			} else if (imagePath.toLowerCase().endsWith('.svg')) {
-				mimeType = 'image/svg+xml';
-			}
-
-			// 将图片数据存入缓存服务
-			await this.plugin.imageCacheService.cacheImage(
-				imagePath,
-				arrayBuffer,
-				undefined,  // 没有 ETag
-				mimeType
-			);
-
-			console.log('图片成功缓存:', imagePath);
-		} catch (error) {
-			console.error('存储图片到缓存失败:', error);
-			throw error;
-		}
-	}
-
-	private async fetchAndCacheImage(imagePath: string, img: HTMLImageElement): Promise<void> {
-		try {
-			// 使用fetch API获取图片
-			const response = await fetch(imagePath, {
-				method: 'GET',
-				credentials: 'omit',
-				cache: 'no-cache',
-				headers: {
-					'Cache-Control': 'no-cache',
+			const imageData = this.imageDataMap.get(imagePath);
+			if (imageData) {
+				// 清理旧的 objectUrl
+				if (imageData.objectUrl) {
+					URL.revokeObjectURL(imageData.objectUrl);
 				}
-			});
-
-			if (!response.ok) {
-				throw new Error(`HTTP error: ${response.status}`);
+				imageData.objectUrl = objectUrl;
 			}
 
-			// 获取ETag用于缓存验证和MIME类型
-			const etag = response.headers.get('etag') || undefined;
-			const contentType = response.headers.get('content-type') || undefined;
-			const arrayBuffer = await response.arrayBuffer();
+			try {
+				// 尝试缓存图片
+				const contentType = blob.type || response.headers.get('content-type') || 'image/jpeg';
+				const etag = response.headers.get('etag');
 
-			// 传递MIME类型到缓存服务
-			const base64Data = await this.plugin.imageCacheService.cacheImage(
-				imagePath,
-				arrayBuffer,
-				etag,
-				contentType || undefined
-			);
+				this.plugin.imageCacheService.cacheImage(
+					imagePath,
+					await blob.arrayBuffer(),
+					etag || undefined,
+					contentType
+				).catch(e => log.error(() => '缓存图片失败:', e));
 
-			img.src = base64Data;
+				log.debug(() => `已将网络图片添加到缓存: ${imagePath}`);
+			} catch (error) {
+				log.error(() => '缓存图片过程中出错:', error);
+			}
 		} catch (error) {
-			console.error('Fetching image failed:', error);
-			// 如果获取失败，回退到直接设置src
-			img.src = imagePath;
+			log.error(() => `自定义fetch加载失败: ${imagePath}`, error);
+			// 直接进入简单加载模式
+			this.loadImageDirectly(imagePath, img, imageDiv, loadingText, resolve, reject, isWeiboImage);
 		}
+	}
+
+	private loadImageDirectly(
+		imagePath: string,
+		img: HTMLImageElement,
+		imageDiv: HTMLElement,
+		loadingText: HTMLElement,
+		resolve: () => void,
+		reject: (error: any) => void,
+		isWeiboImage: boolean = false
+	): void {
+		log.debug(() => `直接加载图片: ${imagePath}`);
+
+		img.onload = () => {
+			log.debug(() => `图片直接加载成功: ${imagePath}`);
+			this.handleImageLoadSuccess(img, imageDiv, loadingText, imagePath);
+			resolve();
+		};
+
+		img.onerror = (e) => {
+			log.error(() => `图片直接加载失败: ${imagePath}, 错误: ${e}`);
+
+			// 对于本地图片尝试替代路径
+			if (!imagePath.startsWith('http://') && !imagePath.startsWith('https://')) {
+				const alternativePath = this.tryAlternativeLocalPath(imagePath);
+				if (alternativePath && alternativePath !== img.src) {
+					log.debug(() => `尝试替代路径: ${alternativePath}`);
+					img.src = alternativePath;
+					return; // 返回等待新路径的加载结果
+				}
+			}
+
+			this.handleImageError(imageDiv, '加载失败');
+			this.loadedImages++;
+			this.updateProgressBar();
+			reject(e);
+		};
+
+		// 如果是微博图片，尝试使用Electron API
+		if (isWeiboImage && typeof require === 'function') {
+			try {
+				const electron = require('electron');
+				if (electron && electron.remote && electron.remote.net) {
+					const request = electron.remote.net.request({
+						url: imagePath,
+						headers: {
+							'Referer': 'https://weibo.com/',
+							'Cache-Control': 'no-cache',
+							'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+						}
+					});
+
+					const imageData: Buffer[] = [];
+
+					request.on('response', (response: any) => {
+						response.on('data', (chunk: Buffer) => {
+							imageData.push(chunk);
+						});
+
+						response.on('end', async () => {
+							try {
+								const buffer = Buffer.concat(imageData);
+								const blob = new Blob([buffer]);
+								const objectUrl = URL.createObjectURL(blob);
+
+								// 清理旧的objectURL
+								const oldObjectUrl = imageDiv.getAttribute('data-object-url');
+								if (oldObjectUrl) {
+									URL.revokeObjectURL(oldObjectUrl);
+								}
+
+								imageDiv.setAttribute('data-object-url', objectUrl);
+								img.src = objectUrl;
+							} catch (error) {
+								log.error(() => '处理Electron响应失败:', error);
+								img.src = imagePath; // 失败时尝试直接设置
+							}
+						});
+					});
+
+					request.on('error', () => {
+						img.src = imagePath; // 失败时尝试直接设置
+					});
+
+					request.end();
+					return; // 结束Electron尝试，等待结果
+				}
+			} catch (e) {
+				log.debug(() => `Electron环境不可用，直接设置src: ${e}`);
+			}
+		}
+
+		// 所有其他情况：直接设置src
+		if (imagePath.startsWith('http://') || imagePath.startsWith('https://')) {
+			img.src = imagePath;
+		} else {
+			// 本地图片
+			try {
+				if (this.isObsidianResourcePath(imagePath)) {
+					img.src = this.getResourcePath(imagePath);
+				} else {
+					const realPath = this.getLinkPath(imagePath);
+					if (realPath) {
+						img.src = this.getResourcePath(realPath);
+					} else {
+						img.src = this.getResourcePath(imagePath);
+					}
+				}
+			} catch (error) {
+				log.error(() => `解析本地图片路径失败: ${imagePath}`, error);
+				this.handleImageError(imageDiv, '找不到图片');
+				this.loadedImages++;
+				this.updateProgressBar();
+				reject(error);
+			}
+		}
+	}
+
+	private isObsidianResourcePath(path: string): boolean {
+		// Obsidian资源路径通常包含_resources或_attachments目录
+		return path.includes('/_resources/') ||
+			path.includes('/_attachments/') ||
+			path.includes('/_assets/') ||
+			path.match(/\/[^\/]+\/[^\/]+\.(png|jpg|jpeg|gif|svg|webp)$/i) !== null;
+	}
+
+	// 尝试替代本地路径格式
+	private tryAlternativeLocalPath(originalPath: string): string | null {
+		try {
+			// 尝试几种常见的路径变形
+			const pathOptions = [
+				originalPath,
+				// 移除前导的/
+				originalPath.startsWith('/') ? originalPath.substring(1) : originalPath,
+				// 添加前导的/
+				!originalPath.startsWith('/') ? '/' + originalPath : originalPath,
+				// 尝试资源目录前缀
+				originalPath.includes('_resources') ? originalPath : `_resources/${originalPath}`,
+				// 尝试移除资源目录前缀
+				originalPath.replace(/^_resources\//, ''),
+				// 尝试当前文件相对路径（如果有活动文件）
+				this.getRelativePathToActiveFile(originalPath)
+			];
+
+			for (const path of pathOptions) {
+				if (!path) continue;
+
+				const file = this.app.vault.getAbstractFileByPath(path);
+				if (file instanceof TFile) {
+					return this.getResourcePath(file.path);
+				}
+
+				const linkedFile = this.app.metadataCache.getFirstLinkpathDest(path, '');
+				if (linkedFile instanceof TFile) {
+					return this.getResourcePath(linkedFile.path);
+				}
+			}
+
+			return this.getResourcePath(originalPath);
+		} catch (error) {
+			log.error(() => '尝试替代路径失败:', error);
+			return null;
+		}
+	}
+
+	// 获取相对于当前活动文件的路径
+	private getRelativePathToActiveFile(path: string): string | null {
+		const activeFile = this.app.workspace.getActiveFile();
+		if (!activeFile) return null;
+
+		const activeDir = activeFile.parent ? activeFile.parent.path : '';
+
+		// 构建相对路径
+		return activeDir ? `${activeDir}/${path}` : path;
 	}
 
 	private handleImageLoadSuccess(img: HTMLImageElement, imageDiv: HTMLElement, loadingText: HTMLElement, imagePath: string): void {
-		console.log(`图片加载成功处理: ${imagePath}, 宽度: ${img.naturalWidth}, 高度: ${img.naturalHeight}`);
+		log.debug(() => `图片加载成功处理: ${imagePath}, 宽度: ${img.naturalWidth}, 高度: ${img.naturalHeight}`);
 
 		if (loadingText && loadingText.parentNode) {
 			loadingText.remove();
@@ -956,6 +893,24 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 		// 强制设置图片可见
 		img.style.opacity = '1';
+		img.setAttribute('complete', 'true');
+		img.classList.add('loaded');
+
+		img.offsetHeight; // 触发重绘
+
+		// 确保样式被应用（额外保障）
+		setTimeout(() => {
+			if (img.style.opacity !== '1') {
+				log.debug(() => `修复延迟显示: ${imagePath}`);
+				img.style.opacity = '1';
+				img.classList.add('loaded');
+
+				// 触发父元素重新计算布局
+				if (imageDiv.parentElement) {
+					imageDiv.parentElement.style.display = imageDiv.parentElement.style.display;
+				}
+			}
+		}, 50);
 
 		this.loadedImages++;
 		this.updateProgressBar();
@@ -966,20 +921,53 @@ export class CurrentNoteImageGalleryService extends Modal {
 		}
 	}
 
-	private async loadWeiboImage(
+	private async loadImageUnified(
 		imagePath: string,
 		img: HTMLImageElement,
 		imageDiv: HTMLElement,
 		loadingText: HTMLElement,
-		retryCount: number = 0
+		isWeiboImage: boolean = false
 	): Promise<void> {
-		const MAX_RETRIES = 3;
+		return new Promise(async (resolve, reject) => {
+			const imageData = this.imageDataMap.get(imagePath);
+			if (!imageData) {
+				reject(new Error('Image data not found'));
+				return;
+			}
 
-		return new Promise<void>(async (resolve, reject) => {
+			const isNetworkImage = imagePath.startsWith('http://') || imagePath.startsWith('https://');
+
+			// 如果是网络图片，先直接设置原始URL开始加载
+			if (isNetworkImage) {
+				// 除非是微博图片，否则先尝试直接加载
+				if (!isWeiboImage) {
+					img.src = imagePath;
+
+					// 设置加载和错误处理
+					img.onload = () => {
+						this.handleImageLoadSuccess(img, imageDiv, loadingText, imagePath);
+						resolve();
+						return; // 直接加载成功则提前返回
+					};
+
+					// 如果直接加载失败，继续下面的步骤
+					img.onerror = (e) => {
+						log.error(() => `直接加载网络图片失败: ${imagePath}, 尝试高级加载方式`);
+						// 此处不reject，继续尝试其他方法
+					};
+				}
+			}
+
 			try {
-				const cachedImage = this.plugin.imageCacheService.getCachedImage(imagePath);
+				// 异步获取缓存
+				const cachedImage = await this.plugin.imageCacheService.getCachedImage(imagePath);
+
 				if (cachedImage) {
-					console.log(`Loading Weibo image from cache: ${imagePath}`);
+					log.debug(() => `从缓存加载图片: ${imagePath}`);
+					loadingText.setText('从缓存加载...');
+
+					const originalOnload = img.onload;
+					const originalOnerror = img.onerror;
 
 					img.onload = () => {
 						this.handleImageLoadSuccess(img, imageDiv, loadingText, imagePath);
@@ -987,7 +975,54 @@ export class CurrentNoteImageGalleryService extends Modal {
 					};
 
 					img.onerror = async (e) => {
-						console.error('Cached Weibo image load error:', e);
+						log.error(() => `缓存图片加载错误: ${e}`);
+
+						// 恢复原始处理器（如果有的话）
+						if (originalOnload) img.onload = originalOnload;
+						if (originalOnerror) img.onerror = originalOnerror;
+
+						// 继续尝试下一个方法
+						await this.tryAdvancedImageLoading(imagePath, img, imageDiv, loadingText, resolve, reject, isWeiboImage);
+					};
+
+					// 设置图片源为缓存的base64数据
+					img.src = cachedImage.data;
+					return;
+				}
+
+				// 如果没有缓存，尝试高级加载方法
+				await this.tryAdvancedImageLoading(imagePath, img, imageDiv, loadingText, resolve, reject, isWeiboImage);
+			} catch (error) {
+				log.error(() => `获取缓存出错: ${imagePath}`, error);
+
+				await this.tryAdvancedImageLoading(imagePath, img, imageDiv, loadingText, resolve, reject, isWeiboImage);
+			}
+		});
+	}
+
+	private async loadWeiboImage(
+		imagePath: string,
+		img: HTMLImageElement,
+		imageDiv: HTMLElement,
+		loadingText: HTMLElement,
+		retryCount: number = 0
+	): Promise<void> {
+
+		return new Promise<void>(async (resolve, reject) => {
+			try {
+				// 异步获取缓存
+				const cachedImage = await this.plugin.imageCacheService.getCachedImage(imagePath);
+
+				if (cachedImage) {
+					log.debug(() => `Loading Weibo image from cache: ${imagePath}`);
+
+					img.onload = () => {
+						this.handleImageLoadSuccess(img, imageDiv, loadingText, imagePath);
+						resolve();
+					};
+
+					img.onerror = async (e) => {
+						log.error(() => `Cached Weibo image load error: ${e}`);
 						await this.loadWeiboImageWithoutCache(imagePath, img, imageDiv, loadingText, retryCount, resolve, reject);
 					};
 
@@ -1016,11 +1051,9 @@ export class CurrentNoteImageGalleryService extends Modal {
 	): Promise<void> {
 		const electron = require('electron');
 		if (!electron || !electron.remote || !electron.remote.net) {
-			console.error('Electron API 不可用');
-			// 回退到标准方式加载
+			log.error(() => 'Electron API 不可用');
 			img.src = imagePath;
 
-			// 确保更新图片数据状态
 			const imageData = this.imageDataMap.get(imagePath);
 			if (imageData) {
 				imageData.isLoading = false;
@@ -1042,7 +1075,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 					try {
 						oldRequest.electronRequest.abort(); // Abort Electron request
 					} catch (e) {
-						console.error('Failed to abort Electron request:', e);
+						log.error(() => 'Failed to abort Electron request:', e);
 					}
 				} else if (oldRequest.controller) {
 					oldRequest.controller.abort(); // Abort fetch request
@@ -1129,7 +1162,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 					img.onerror = async () => {
 						URL.revokeObjectURL(objectUrl);
 						if (retryCount < MAX_RETRIES) {
-							console.log(`Retrying image load (${retryCount + 1}/${MAX_RETRIES}): ${imagePath}`);
+							log.debug(() => `Retrying image load (${retryCount + 1}/${MAX_RETRIES}): ${imagePath}`);
 							await this.loadWeiboImage(imagePath, img, imageDiv, loadingText, retryCount + 1);
 							resolve();
 						} else {
@@ -1148,7 +1181,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 		});
 
 		request.on('error', (error: Error) => {
-			console.error(`微博图片请求错误: ${imagePath}`, error);
+			log.error(() => `微博图片请求错误: ${imagePath}`, error);
 			this.handleError(error, imageDiv, requestId, retryCount);
 
 			// 确保更新图片数据状态
@@ -1161,11 +1194,11 @@ export class CurrentNoteImageGalleryService extends Modal {
 		});
 
 		const timeoutId = setTimeout(() => {
-			console.warn(`微博图片请求超时: ${imagePath}`);
+			log.warn(`微博图片请求超时: ${imagePath}`);
 			try {
 				request.abort();
 			} catch (e) {
-				console.error('中止超时请求时出错:', e);
+				log.error(() => '中止超时请求时出错:', e);
 			}
 			this.currentRequests.delete(requestId);
 
@@ -1176,7 +1209,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 			}
 
 			if (retryCount < MAX_RETRIES) {
-				console.log(`超时后重试加载微博图片 (${retryCount + 1}/${MAX_RETRIES}): ${imagePath}`);
+				log.debug(() => `超时后重试加载微博图片 (${retryCount + 1}/${MAX_RETRIES}): ${imagePath}`);
 				this.loadWeiboImage(imagePath, img, imageDiv, loadingText, retryCount + 1)
 					.then(resolve)
 					.catch(reject);
@@ -1194,13 +1227,13 @@ export class CurrentNoteImageGalleryService extends Modal {
 	private handleError(error: Error, imageDiv: HTMLElement, requestId: string | undefined, retryCount: number) {
 		const MAX_RETRIES = 3;
 
-		console.error('Error loading Weibo image:', error);
+		log.error(() => 'Error loading Weibo image:', error);
 		if (requestId) {
 			this.currentRequests.delete(requestId);
 		}
 
 		if (retryCount < MAX_RETRIES) {
-			console.log(`Retrying after error (${retryCount + 1}/${MAX_RETRIES})`);
+			log.debug(() => `Retrying after error (${retryCount + 1}/${MAX_RETRIES})`);
 			setTimeout(() => {
 				const img = imageDiv.querySelector('img');
 				const loadingText = imageDiv.querySelector('.loading-text');
@@ -1221,22 +1254,18 @@ export class CurrentNoteImageGalleryService extends Modal {
 		if (progressEl) {
 			progressEl.setAttribute('value', this.loadedImages.toString());
 
-			// 计算百分比并更新文本
-			const percentage = Math.round((this.loadedImages / this.totalImages) * 100);
 			if (progressText) {
 				progressText.setText(`${this.loadedImages}/${this.totalImages}`);
 			}
 
-			// 当加载完成时添加完成动画
 			if (this.loadedImages >= this.totalImages) {
-				// 添加一个小延迟，让用户看到进度条完成
-				setTimeout(() => {
-					const container = this.contentEl.querySelector('.progress-container');
-					if (container) {
-						container.addClass('complete');
-					}
-				}, 800); // 较短的延迟，保持用户体验流畅
 			}
+			setTimeout(() => {
+				const container = this.contentEl.querySelector('.progress-container');
+				if (container) {
+					container.addClass('complete');
+				}
+			}, 800);
 		}
 	}
 
@@ -1248,12 +1277,58 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 	private getLinkPath(link: string): string | null {
 		try {
+			// 如果是直接文件格式，不是Wiki链接
+			if (!link.includes('[[') && !link.includes(']]')) {
+				// 尝试作为直接文件路径
+				const directFile = this.app.vault.getAbstractFileByPath(link);
+				if (directFile instanceof TFile) {
+					log.debug(() => `找到直接文件路径: ${link}`);
+					return directFile.path;
+				}
+
+				// 尝试解析为链接路径
+				const dest = this.app.metadataCache.getFirstLinkpathDest(link, '');
+				if (dest instanceof TFile) {
+					log.debug(() => `解析为链接路径: ${dest.path}`);
+					return dest.path;
+				}
+
+				// 如果是文件名（没有路径），尝试在库中查找
+				if (!link.includes('/')) {
+					const allFiles = this.app.vault.getFiles();
+					const matchedFiles = allFiles.filter(f => f.name === link);
+					if (matchedFiles.length > 0) {
+						log.debug(() => `通过文件名找到: ${matchedFiles[0].path}`);
+						return matchedFiles[0].path;
+					}
+				}
+
+				// 如果都失败了，尝试添加_resources前缀
+				if (!link.startsWith('_resources/')) {
+					const resourcePath = `_resources/${link}`;
+					const resourceFile = this.app.vault.getAbstractFileByPath(resourcePath);
+					if (resourceFile instanceof TFile) {
+						log.debug(() => `找到资源文件: ${resourcePath}`);
+						return resourceFile.path;
+					}
+				}
+
+				return link;
+			}
+
+			// 处理Wiki链接格式 ![[图片]]
 			const stripped = link.replace(/!?\[\[(.*?)]]/, '$1');
 			const path = stripped.split('|')[0].trim();
+
 			const file = this.app.metadataCache.getFirstLinkpathDest(path, '');
-			return file instanceof TFile ? file.path : null;
+			if (file instanceof TFile) {
+				log.debug(() => `Wiki链接解析为: ${file.path}`);
+				return file.path;
+			}
+
+			return path;
 		} catch (error) {
-			console.error('Error getting link path:', error);
+			log.error(() => 'Error getting link path:', error);
 			return null;
 		}
 	}
@@ -1295,7 +1370,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 			new Notice('图片已复制到剪贴板');
 		} catch (err) {
-			console.error('Copy failed:', err);
+			log.error(() => 'Copy failed:', err);
 			new Notice('复制失败，请重试');
 		}
 	}
@@ -1321,15 +1396,12 @@ export class CurrentNoteImageGalleryService extends Modal {
 		try {
 			const a = document.createElement('a');
 
-			// 从图片 src 获取文件名
 			const src = img.src;
 			let filename = 'image.png';
 
 			if (src.startsWith('blob:')) {
-				// 对于 blob URL，使用通用名称
 				filename = 'obsidian-image.png';
 			} else {
-				// 尝试从 URL 提取文件名
 				const urlParts = src.split('/');
 				if (urlParts.length > 0) {
 					const potentialName = urlParts[urlParts.length - 1].split('?')[0];
@@ -1345,7 +1417,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 			new Notice('正在下载图片');
 		} catch (error) {
-			console.error('下载失败:', error);
+			log.error(() => '下载失败:', error);
 			new Notice('图片下载失败');
 		}
 	}
@@ -1447,7 +1519,6 @@ export class CurrentNoteImageGalleryService extends Modal {
 			const imageData = this.imageDataMap.get(imagePath);
 
 			if (imageData && imageData.objectUrl) {
-				// 如果有缓存的 object URL 则使用它
 				img.src = imageData.objectUrl;
 			} else if (imagePath.startsWith('http://') || imagePath.startsWith('https://')) {
 				// 使用直接 URL
@@ -1525,7 +1596,6 @@ export class CurrentNoteImageGalleryService extends Modal {
 			}
 		};
 
-		// 添加键盘导航
 		const handleKeyDown = (e: KeyboardEvent) => {
 			switch (e.key) {
 				case 'ArrowLeft':
@@ -1564,21 +1634,19 @@ export class CurrentNoteImageGalleryService extends Modal {
 					request.electronRequest.abort();
 				}
 			} catch (e) {
-				console.error('中止请求时出错:', e);
+				log.error(() => '中止请求时出错:', e);
 			}
 		});
 		this.currentRequests.clear();
 
-		// 释放对象 URL
+		// 清理所有图片资源
 		this.imageDataMap.forEach((data) => {
-			if (data.objectUrl) {
-				try {
-					URL.revokeObjectURL(data.objectUrl);
-				} catch (e) {
-					console.error('撤销对象 URL 时出错:', e);
-				}
+			const img = data.element.querySelector('img') as HTMLImageElement;
+			if (img) {
+				this.plugin.imageLoader.revokeImageResources(img);
 			}
 		});
+
 		this.imageDataMap.clear();
 
 		// 清理观察者和事件监听器

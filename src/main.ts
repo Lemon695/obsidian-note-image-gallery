@@ -3,19 +3,27 @@ import {DEFAULT_SETTINGS, Settings, NoteImageGallerySettingTab} from './settings
 import {CurrentNoteImageGalleryService} from "./service/current-note-image-gallery-service";
 import {ImageCacheService} from './service/image-cache-service';
 import {ImageExtractorService} from "./service/image-extractor-service";
+import { Logger, LogLevel, createLogger, log } from './utils/log-utils';
+import {ObsidianImageLoader} from "./service/obsidian-image-loader";
 
 export default class NoteImageGalleryPlugin extends Plugin {
 
 	private imageExtractorService: ImageExtractorService;
 	private currentNoteImageGalleryService: CurrentNoteImageGalleryService | null = null;
 	public imageCacheService: ImageCacheService;
+	public imageLoader: ObsidianImageLoader;
 	public settings: Settings;
 
 	async onload() {
 		await this.loadSettings();
 
+		log.setDebugMode(this.settings.debugMode);
+
 		this.imageExtractorService = new ImageExtractorService();
 		this.imageCacheService = new ImageCacheService(this.app);
+
+		this.imageLoader = new ObsidianImageLoader(this.app, this);
+		await this.imageCacheService.initCache();
 
 		this.imageCacheService.setMaxCacheAge(this.settings.maxCacheAge * 24 * 60 * 60 * 1000);
 		this.imageCacheService.setMaxCacheSize(this.settings.maxCacheSize * 1024 * 1024);
@@ -58,6 +66,7 @@ export default class NoteImageGalleryPlugin extends Plugin {
 
 	async saveSettings() {
 		await this.saveData(this.settings);
+		log.setDebugMode(this.settings.debugMode);
 	}
 
 	private async openImageGalleryModal() {
@@ -71,7 +80,7 @@ export default class NoteImageGalleryPlugin extends Plugin {
 			this.currentNoteImageGalleryService = new CurrentNoteImageGalleryService(this.app, this, images);
 			this.currentNoteImageGalleryService.open();
 		} catch (error) {
-			console.error('Error opening image gallery modal:', error);
+			log.error('Error opening image gallery modal:', error);
 			new Notice('Error opening image gallery');
 		}
 	}
@@ -93,6 +102,16 @@ export default class NoteImageGalleryPlugin extends Plugin {
 	}
 
 	onunload() {
+		// 确保缓存索引保存到磁盘
+		if (this.imageCacheService) {
+			// 无需等待，只是尝试保存
+			try {
+				this.imageCacheService.saveCacheIndex?.();
+			} catch (e) {
+				log.error('保存缓存索引失败:', e);
+			}
+		}
+
 		if (this.currentNoteImageGalleryService) {
 			this.currentNoteImageGalleryService.close();
 			this.currentNoteImageGalleryService = null;

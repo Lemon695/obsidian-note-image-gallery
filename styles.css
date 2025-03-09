@@ -426,3 +426,12 @@
 	z-index: 2;
 	position: relative;
 }
+
+/* 确保已加载图片保持可见状态 */
+.image-item img[style*="opacity: 1"],
+.image-item img.loaded,
+.image-item img[complete="true"] {
+	opacity: 1 !important;
+	z-index: 2 !important;
+	position: relative !important;
+}
