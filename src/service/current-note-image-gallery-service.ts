@@ -27,8 +27,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 	private totalImages: number = 0;
 	private currentRequests: Map<string, ImageRequest> = new Map();
 	private imageDataMap: Map<string, ImageData> = new Map();
-	private queueImageLoad: (imagePath: string) => void = () => {
-	};
+	private queueImageLoad: (imagePath: string, isVisible?: boolean) => void = () => { };
 	private intersectionObserver: IntersectionObserver | null = null;
 	private cleanupVirtualScroll: () => void = () => {
 	};
@@ -310,7 +309,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 				if (isVisible) {
 					// 在可视区域内且符合筛选条件
 					if (!data.isLoading && !data.objectUrl && !data.hasError) {
-						this.queueImageLoad(data.path);
+						this.queueImageLoad(data.path, true);
 					}
 					data.element.style.visibility = ''; // 显示元素
 
@@ -327,6 +326,11 @@ export class CurrentNoteImageGalleryService extends Modal {
 					// 不在可视区域内但符合筛选条件
 					// 设置为隐藏但保留在DOM中
 					data.element.style.visibility = 'hidden';
+
+					// 对不可见的图片，也添加到加载队列，但优先级较低
+					if (!data.isLoading && !data.objectUrl && !data.hasError) {
+						this.queueImageLoad(data.path, false); // false 表示不在可视区域内
+					}
 				}
 			});
 
@@ -616,7 +620,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 		try {
 			const controller = new AbortController();
 			// 减少超时时间
-			const timeoutId = setTimeout(() => controller.abort(), 1500);
+			const timeoutId = setTimeout(() => controller.abort(), 2000);
 
 			const fetchOptions: RequestInit = {
 				method: 'GET',
@@ -626,29 +630,59 @@ export class CurrentNoteImageGalleryService extends Modal {
 				headers: {
 					'Cache-Control': 'no-cache',
 					'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
-					'Referer': isWeiboImage ? 'https://weibo.com/' : 'https://obsidian.md/'
-				}
+					'Referer': isWeiboImage ? 'https://weibo.com/' : 'https://obsidian.md/',
+					'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+				},
+				mode: isWeiboImage ? 'no-cors' : undefined
 			};
 
 			const response = await fetch(imagePath, fetchOptions);
 			clearTimeout(timeoutId);
 
-			if (!response.ok) {
+			if (!response.ok && !isWeiboImage) { // no-cors 模式下无法检查状态
 				throw new Error(`HTTP error: ${response.status}`);
 			}
 
 			const blob = await response.blob();
 			const objectUrl = URL.createObjectURL(blob);
 
-			const oldObjectUrl = imageDiv.getAttribute('data-object-url');
-			if (oldObjectUrl) {
-				URL.revokeObjectURL(oldObjectUrl);
-			}
+			// 注册清理函数，确保在各种情况下都能释放资源
+			const cleanupResources = () => {
+				const oldObjectUrl = imageDiv.getAttribute('data-object-url');
+				if (oldObjectUrl) {
+					URL.revokeObjectURL(oldObjectUrl);
+				}
+			};
 
+			cleanupResources(); // 先清理旧资源
 			imageDiv.setAttribute('data-object-url', objectUrl);
 
 			img.onload = () => {
 				this.handleImageLoadSuccess(img, imageDiv, loadingText, imagePath);
+
+				try {
+					// 转换Blob为ArrayBuffer只进行一次
+					blob.arrayBuffer().then(arrayBuffer => {
+						const contentType = blob.type || response.headers?.get('content-type') || 'image/jpeg';
+						const etag = response.headers?.get('etag');
+
+						log.debug(() => `正在缓存通过fetch加载的图片: ${imagePath}, 类型: ${contentType}, 大小: ${Math.round(arrayBuffer.byteLength / 1024)}KB`);
+
+						this.plugin.imageCacheService.cacheImage(
+							imagePath,
+							arrayBuffer,
+							etag || undefined,
+							contentType
+						).then(() => {
+							log.debug(() => `成功缓存fetch加载的图片: ${imagePath}`);
+						}).catch(cacheError => {
+							log.error(() => `缓存fetch加载的图片失败: ${imagePath}, 错误: ${cacheError.message}`, cacheError);
+						});
+					});
+				} catch (error) {
+					log.error(() => `处理图片缓存时出错: ${imagePath}, 错误: ${error.message}`, error);
+				}
+
 				resolve();
 			};
 

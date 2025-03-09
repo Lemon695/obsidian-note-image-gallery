@@ -13,6 +13,9 @@ interface CacheIndex {
 		etag?: string;
 		filename: string;
 		size: number;
+		accessCount?: number;  // 访问计数
+		lastAccessed?: number; // 最后访问时间
+		score?: number;
 	}
 }
 
@@ -26,6 +29,7 @@ export class ImageCacheService {
 	private shouldUseCacheCallback: (() => boolean) | null = null;
 	private _isSaving: boolean = false;
 	private totalCacheSize: number = 0;
+	private debounceSaveTimeout: NodeJS.Timeout | null = null;
 
 	constructor(app: App) {
 		this.app = app;
@@ -316,6 +320,13 @@ export class ImageCacheService {
 
 			const base64Data = await this.arrayBufferToBase64(arrayBuffer);
 
+			// 更新访问统计信息
+			cacheEntry.accessCount = (cacheEntry.accessCount || 0) + 1;
+			cacheEntry.lastAccessed = Date.now();
+
+			// 使用防抖保存索引，避免频繁写入
+			this.debouncedSaveCacheIndex();
+
 			return {
 				data: base64Data,
 				timestamp: cacheEntry.timestamp,
@@ -328,46 +339,83 @@ export class ImageCacheService {
 		}
 	}
 
+	// 添加防抖保存索引方法
+	private debouncedSaveCacheIndex(delay: number = 2000): void {
+		if (this.debounceSaveTimeout) {
+			clearTimeout(this.debounceSaveTimeout);
+		}
+
+		this.debounceSaveTimeout = setTimeout(() => {
+			this.saveCacheIndex().catch(e => {
+				log.error(() => `延迟保存缓存索引失败:`, e);
+			});
+			this.debounceSaveTimeout = null;
+		}, delay);
+	}
+
 	/**
 	 * 清除过期缓存和超出大小限制的缓存
 	 */
 	async cleanCache() {
 		const now = Date.now();
-		const urlsByAge: { url: string, timestamp: number, size: number }[] = [];
+		let removedCount = 0;
+		let freedSpace = 0;
 
-		// 清除过期缓存并收集有效缓存的信息
+		// 步骤1: 删除过期缓存
 		for (const url of Object.keys(this.cacheIndex)) {
 			const entry = this.cacheIndex[url];
 			if (now - entry.timestamp > this.maxCacheAge) {
+				const size = entry.size;
 				await this.removeCacheEntry(url);
-			} else {
-				urlsByAge.push({
-					url,
-					timestamp: entry.timestamp,
-					size: entry.size
-				});
+				removedCount++;
+				freedSpace += size;
 			}
 		}
 
-		// 如果缓存仍然超过最大大小，删除最旧的缓存
-		if (this.totalCacheSize > this.maxCacheSize && urlsByAge.length > 0) {
-			// 按时间戳排序
-			urlsByAge.sort((a, b) => a.timestamp - b.timestamp);
+		// 如果缓存仍然超过最大大小，需要进一步清理
+		if (this.totalCacheSize > this.maxCacheSize) {
+			// 收集有效缓存项
+			const validEntries = Object.entries(this.cacheIndex).map(([url, entry]) => ({
+				url,
+				timestamp: entry.timestamp,
+				size: entry.size,
+				accessCount: entry.accessCount || 0,
+				lastAccessed: entry.lastAccessed || entry.timestamp,
+				score:0
+			}));
+
+			// 计算优先级分数 (较低的分数会先被删除)
+			// 公式: 访问次数 * 10 + 最近访问时间的新鲜度 + 文件大小的惩罚
+			validEntries.forEach(entry => {
+				const recencyScore = Math.min(10, (now - entry.lastAccessed) / (1000 * 60 * 60 * 24)); // 最多10天
+				const sizeScore = Math.min(5, entry.size / (1024 * 1024)); // 超过5MB开始惩罚
+				entry['score'] = (entry.accessCount * 10) + (10 - recencyScore) - sizeScore;
+			});
+
+			// 按分数排序 (低分优先删除)
+			validEntries.sort((a, b) => a['score'] - b['score']);
 
 			// 计算需要释放的空间
 			let spaceToFree = this.totalCacheSize - (this.maxCacheSize * 0.8); // 释放到80%
-			log.debug(() => `缓存超过限制，需要释放 ${Math.round(spaceToFree / 1024 / 1024)}MB 空间`);
+			log.debug(() => `缓存超过限制，需要释放 ${Math.round(spaceToFree / 1024 / 1024)}MB 空间, 根据优先级`);
 
-			// 从最旧的开始删除，直到释放足够空间
-			for (const entry of urlsByAge) {
+			// 从低分开始删除，直到释放足够空间
+			for (const entry of validEntries) {
 				if (spaceToFree <= 0) break;
 
+				log.debug(() => `删除低优先级缓存: ${entry.url}, 分数: ${entry['score']}, 大小: ${Math.round(entry.size / 1024)}KB`);
 				await this.removeCacheEntry(entry.url);
+
+				freedSpace += entry.size;
 				spaceToFree -= entry.size;
+				removedCount++;
 			}
 		}
 
-		await this.saveCacheIndex();
+		if (removedCount > 0) {
+			log.debug(() => `缓存清理完成: 删除了 ${removedCount} 项，释放了 ${Math.round(freedSpace / 1024 / 1024)}MB 空间`);
+			await this.saveCacheIndex();
+		}
 	}
 
 	/**
