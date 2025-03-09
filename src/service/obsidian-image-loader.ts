@@ -136,7 +136,6 @@ export class ObsidianImageLoader {
 			};
 
 			const response: RequestUrlResponse = await requestUrl(requestOptions);
-
 			if (response.status < 200 || response.status >= 300) {
 				throw new Error(`HTTP error: ${response.status}`);
 			}
@@ -156,10 +155,11 @@ export class ObsidianImageLoader {
 			}
 
 			img.setAttribute('data-object-url', objectUrl);
-
 			img.src = objectUrl;
 
 			try {
+				log.debug(() => `尝试缓存网络图片: ${imageUrl}, 内容类型: ${contentType}`);
+
 				await this.plugin.imageCacheService.cacheImage(
 					imageUrl,
 					arrayBuffer,

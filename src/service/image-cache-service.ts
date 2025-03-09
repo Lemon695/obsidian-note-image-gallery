@@ -36,16 +36,32 @@ export class ImageCacheService {
 	 * 初始化缓存目录
 	 */
 	private async ensureCacheDir() {
-		const adapter = this.app.vault.adapter;
+		try {
+			const adapter = this.app.vault.adapter;
 
-		const pluginDir = '.obsidian/plugins/note-image-gallery';
-		if (!(await adapter.exists(pluginDir))) {
-			await adapter.mkdir(pluginDir);
-		}
+			// 检查并创建插件目录
+			const pluginDir = '.obsidian/plugins/note-image-gallery';
+			if (!(await adapter.exists(pluginDir))) {
+				log.debug(() => `创建插件目录: ${pluginDir}`);
+				await adapter.mkdir(pluginDir);
+			}
 
-		const exists = await adapter.exists(this.cacheDir);
-		if (!exists) {
-			await adapter.mkdir(this.cacheDir);
+			// 检查并创建缓存目录
+			if (!(await adapter.exists(this.cacheDir))) {
+				log.debug(() => `创建缓存目录: ${this.cacheDir}`);
+				await adapter.mkdir(this.cacheDir);
+			}
+
+			// 验证目录是否已创建成功
+			if (!(await adapter.exists(this.cacheDir))) {
+				throw new Error(`无法验证缓存目录是否创建成功: ${this.cacheDir}`);
+			}
+
+			log.debug(() => `缓存目录已确认: ${this.cacheDir}`);
+			return true;
+		} catch (error) {
+			log.error(() => `确保缓存目录存在时出错:`, error);
+			throw error; // 重新抛出错误以便调用者知道操作失败
 		}
 	}
 
@@ -136,27 +152,44 @@ export class ImageCacheService {
 	 * 保存缓存索引
 	 */
 	public async saveCacheIndex() {
-		if (this._isSaving) return;
+		if (this._isSaving) {
+			log.debug(() => `缓存索引正在保存中，跳过重复调用`);
+			return;
+		}
 
 		this._isSaving = true;
 		let retries = 0;
 		const maxRetries = 3;
 
+		log.debug(() => `开始保存缓存索引，条目数: ${Object.keys(this.cacheIndex).length}`);
+
 		while (retries < maxRetries) {
 			try {
+				// 确保缓存目录存在
 				await this.ensureCacheDir();
+
+				// 准备JSON数据
+				const jsonData = JSON.stringify(this.cacheIndex, null, 2); // 使用格式化的JSON便于检查
+
+				// 写入文件
 				const adapter = this.app.vault.adapter;
-				await adapter.write(this.indexFile, JSON.stringify(this.cacheIndex));
-				log.debug(() => `缓存索引保存成功`);
+				await adapter.write(this.indexFile, jsonData);
+
+				log.debug(() => `缓存索引保存成功，大小: ${Math.round(jsonData.length / 1024)}KB`);
 				break;
 			} catch (e) {
 				retries++;
 				log.error(() => `保存缓存索引失败 (尝试 ${retries}/${maxRetries}):`, e);
+
 				if (retries >= maxRetries) {
+					log.error(() => `达到最大重试次数，无法保存缓存索引`);
 					break;
 				}
+
 				// 等待短暂时间后重试
-				await new Promise(resolve => setTimeout(resolve, 500 * retries));
+				const delay = 500 * retries;
+				log.debug(() => `${delay}ms后重试保存缓存索引`);
+				await new Promise(resolve => setTimeout(resolve, delay));
 			}
 		}
 
@@ -167,28 +200,53 @@ export class ImageCacheService {
 	 * 将图片添加到缓存
 	 */
 	async cacheImage(url: string, data: ArrayBuffer, etag?: string, mimeType?: string): Promise<string> {
+		log.debug(() => `请求缓存图片: ${url}, 大小: ${Math.round(data.byteLength / 1024)}KB, 类型: ${mimeType || '未知'}`);
+
+		if (!data || data.byteLength === 0) {
+			log.error(() => `跳过缓存图片 ${url}: 数据无效或为空`);
+			return this.arrayBufferToBase64(data);
+		}
+
 		// 检查是否应该缓存此图片
 		if (!this.shouldCacheImage(url, mimeType)) {
-			// 不缓存，返回base64数据供直接使用
+			log.debug(() => `跳过缓存图片 ${url}: 缓存条件不满足`);
 			return await this.arrayBufferToBase64(data);
 		}
 
 		// 检查数据大小，过大的图片不缓存
 		const MAX_SINGLE_IMAGE_SIZE = 20 * 1024 * 1024; // 20MB单图片上限
 		if (data.byteLength > MAX_SINGLE_IMAGE_SIZE) {
-			log.debug(() => `图片 ${url} 过大 (${Math.round(data.byteLength / 1024)}KB)，不缓存`);
+			log.debug(() => `跳过缓存图片 ${url}: 图片过大 (${Math.round(data.byteLength / 1024)}KB)`);
 			return await this.arrayBufferToBase64(data);
 		}
 
+		// 转换为base64用于返回（在任何情况下都需要返回）
+		const base64Data = await this.arrayBufferToBase64(data);
+
 		try {
-			// 转换为base64用于返回
-			const base64Data = await this.arrayBufferToBase64(data);
+			// 确保缓存目录存在
+			const dirExists = await this.ensureCacheDir();
+			if (!dirExists) {
+				throw new Error("无法确保缓存目录存在");
+			}
 
 			// 生成文件名
 			const filename = this.generateFilename(url);
 			const filePath = `${this.cacheDir}/${filename}`;
 
-			// 更新索引
+			log.debug(() => `写入缓存文件: ${filePath}, 大小: ${Math.round(data.byteLength / 1024)}KB`);
+
+			const dataArray = new Uint8Array(data);
+
+			// 先写入文件，确保成功
+			await this.app.vault.adapter.writeBinary(filePath, dataArray);
+
+			const fileExists = await this.app.vault.adapter.exists(filePath);
+			if (!fileExists) {
+				throw new Error(`缓存文件写入后验证失败: ${filePath}`);
+			}
+
+			// 文件写入成功后再更新索引
 			this.cacheIndex[url] = {
 				timestamp: Date.now(),
 				etag: etag,
@@ -203,47 +261,59 @@ export class ImageCacheService {
 				await this.cleanCache();
 			}
 
-			await this.app.vault.adapter.writeBinary(filePath, new Uint8Array(data));
-
+			// 保存索引
 			await this.saveCacheIndex();
 
-			log.debug(() => `已将网络图片添加到缓存: ${url}`);
-
-			return base64Data;
+			log.debug(() => `成功缓存图片: ${url}, 总缓存大小: ${Math.round(this.totalCacheSize / 1024 / 1024)}MB`);
 		} catch (error) {
 			log.error(() => `缓存图片 ${url} 失败:`, error);
-			return await this.arrayBufferToBase64(data);
 		}
+
+		return base64Data;
 	}
 
 	/**
 	 * 从缓存中获取图片
 	 */
 	async getCachedImage(url: string): Promise<CachedImage | null> {
+		log.debug(() => `检查缓存: ${url}`);
+
+		// 首先检查缓存是否启用
+		if (!this.shouldUseCache()) {
+			log.debug(() => `缓存未启用，跳过检查: ${url}`);
+			return null;
+		}
+
 		const cacheEntry = this.cacheIndex[url];
 
 		if (!cacheEntry) {
+			log.debug(() => `缓存未命中: ${url}`);
 			return null;
 		}
 
 		// 检查缓存是否过期
 		if (Date.now() - cacheEntry.timestamp > this.maxCacheAge) {
+			log.debug(() => `缓存已过期: ${url}, 时间: ${new Date(cacheEntry.timestamp).toLocaleString()}`);
 			await this.removeCacheEntry(url);
 			return null;
 		}
 
 		try {
 			const filePath = `${this.cacheDir}/${cacheEntry.filename}`;
+			log.debug(() => `读取缓存文件: ${filePath}`);
 
 			// 检查文件是否存在
 			const exists = await this.app.vault.adapter.exists(filePath);
 			if (!exists) {
+				log.warn(() => `缓存索引存在但文件不存在: ${filePath}`);
 				await this.removeCacheEntry(url);
 				return null;
 			}
 
 			// 读取缓存文件
 			const arrayBuffer = await this.app.vault.adapter.readBinary(filePath);
+			log.debug(() => `读取缓存成功: ${url}, 大小: ${Math.round(arrayBuffer.byteLength / 1024)}KB`);
+
 			const base64Data = await this.arrayBufferToBase64(arrayBuffer);
 
 			return {
@@ -435,8 +505,13 @@ export class ImageCacheService {
 	 */
 	shouldUseCache(): boolean {
 		if (this.shouldUseCacheCallback) {
-			return this.shouldUseCacheCallback();
+			const enabled = this.shouldUseCacheCallback();
+			if (!enabled) {
+				log.debug(() => `缓存已禁用（通过回调函数）`);
+			}
+			return enabled;
 		}
+		log.debug(() => `缓存已启用（默认值）`);
 		return true; // 默认启用缓存
 	}
 

@@ -675,14 +675,21 @@ export class CurrentNoteImageGalleryService extends Modal {
 				const contentType = blob.type || response.headers.get('content-type') || 'image/jpeg';
 				const etag = response.headers.get('etag');
 
-				this.plugin.imageCacheService.cacheImage(
-					imagePath,
-					await blob.arrayBuffer(),
-					etag || undefined,
-					contentType
-				).catch(e => log.error(() => '缓存图片失败:', e));
+				log.debug(() => `正在缓存图片: ${imagePath}, 类型: ${contentType}`);
 
-				log.debug(() => `已将网络图片添加到缓存: ${imagePath}`);
+				const arrayBuffer = await blob.arrayBuffer();
+
+				try {
+					await this.plugin.imageCacheService.cacheImage(
+						imagePath,
+						arrayBuffer,
+						etag || undefined,
+						contentType
+					);
+					log.debug(() => `成功缓存图片: ${imagePath}`);
+				} catch (cacheError) {
+					log.error(() => `缓存图片失败: ${imagePath}`, cacheError);
+				}
 			} catch (error) {
 				log.error(() => '缓存图片过程中出错:', error);
 			}
@@ -704,9 +711,66 @@ export class CurrentNoteImageGalleryService extends Modal {
 	): void {
 		log.debug(() => `直接加载图片: ${imagePath}`);
 
+		// 添加对已成功加载的图片进行缓存的功能
+		const setupCaching = (imageElement: HTMLImageElement) => {
+			if (!this.plugin.settings.enableCache) return;
+
+			// 仅对网络图片（尤其是微博图片）启用缓存
+			if (!(imagePath.startsWith('http://') || imagePath.startsWith('https://'))) return;
+
+			try {
+				// 创建画布来获取图片数据
+				const canvas = document.createElement('canvas');
+				canvas.width = imageElement.naturalWidth;
+				canvas.height = imageElement.naturalHeight;
+
+				const ctx = canvas.getContext('2d');
+				if (!ctx) {
+					log.error(() => `无法创建canvas上下文用于缓存: ${imagePath}`);
+					return;
+				}
+
+				// 绘制图片到画布
+				ctx.drawImage(imageElement, 0, 0);
+
+				// 将画布内容转换为Blob
+				canvas.toBlob(async (blob) => {
+					if (!blob) {
+						log.error(() => `无法从画布创建Blob: ${imagePath}`);
+						return;
+					}
+
+					try {
+						log.debug(() => `从直接加载的图片创建缓存: ${imagePath}, 大小: ${Math.round(blob.size / 1024)}KB`);
+
+						// 转换为ArrayBuffer
+						const arrayBuffer = await blob.arrayBuffer();
+
+						// 调用缓存服务
+						await this.plugin.imageCacheService.cacheImage(
+							imagePath,
+							arrayBuffer,
+							undefined,
+							blob.type || 'image/jpeg'
+						);
+
+						log.debug(() => `成功缓存直接加载的图片: ${imagePath}`);
+					} catch (error) {
+						log.error(() => `缓存直接加载的图片失败: ${imagePath}, 错误: ${error.message}`, error);
+					}
+				}, 'image/jpeg', 0.95); // 使用JPEG格式，95%质量
+			} catch (error) {
+				log.error(() => `设置图片缓存时出错: ${imagePath}`, error);
+			}
+		};
+
 		img.onload = () => {
 			log.debug(() => `图片直接加载成功: ${imagePath}`);
 			this.handleImageLoadSuccess(img, imageDiv, loadingText, imagePath);
+
+			// 图片加载成功后尝试缓存
+			setupCaching(img);
+
 			resolve();
 		};
 
@@ -764,6 +828,23 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 								imageDiv.setAttribute('data-object-url', objectUrl);
 								img.src = objectUrl;
+
+								// 尝试缓存从Electron API获取的图片
+								try {
+									const contentType = response.headers['content-type'] || 'image/jpeg';
+									log.debug(() => `缓存从Electron API获取的图片: ${imagePath}, 类型: ${contentType}`);
+
+									await this.plugin.imageCacheService.cacheImage(
+										imagePath,
+										buffer.buffer,
+										undefined,
+										contentType
+									);
+
+									log.debug(() => `成功缓存从Electron API获取的图片: ${imagePath}`);
+								} catch (cacheError) {
+									log.error(() => `缓存从Electron API获取的图片失败: ${imagePath}`, cacheError);
+								}
 							} catch (error) {
 								log.error(() => '处理Electron响应失败:', error);
 								img.src = imagePath; // 失败时尝试直接设置
@@ -959,35 +1040,44 @@ export class CurrentNoteImageGalleryService extends Modal {
 			}
 
 			try {
-				// 异步获取缓存
-				const cachedImage = await this.plugin.imageCacheService.getCachedImage(imagePath);
+				if (this.plugin.settings.enableCache) {
+					log.debug(() => `检查图片缓存: ${imagePath}`);
 
-				if (cachedImage) {
-					log.debug(() => `从缓存加载图片: ${imagePath}`);
-					loadingText.setText('从缓存加载...');
+					// 异步获取缓存
+					const cachedImage = await this.plugin.imageCacheService.getCachedImage(imagePath);
 
-					const originalOnload = img.onload;
-					const originalOnerror = img.onerror;
+					if (cachedImage) {
+						log.debug(() => `缓存命中，从缓存加载图片: ${imagePath}`);
+						loadingText.setText('从缓存加载...');
 
-					img.onload = () => {
-						this.handleImageLoadSuccess(img, imageDiv, loadingText, imagePath);
-						resolve();
-					};
+						const originalOnload = img.onload;
+						const originalOnerror = img.onerror;
 
-					img.onerror = async (e) => {
-						log.error(() => `缓存图片加载错误: ${e}`);
+						img.onload = () => {
+							log.debug(() => `缓存图片加载成功: ${imagePath}`);
+							this.handleImageLoadSuccess(img, imageDiv, loadingText, imagePath);
+							resolve();
+						};
 
-						// 恢复原始处理器（如果有的话）
-						if (originalOnload) img.onload = originalOnload;
-						if (originalOnerror) img.onerror = originalOnerror;
+						img.onerror = async (e) => {
+							log.error(() => `缓存图片加载失败: ${imagePath}, 错误: ${e}`);
 
-						// 继续尝试下一个方法
-						await this.tryAdvancedImageLoading(imagePath, img, imageDiv, loadingText, resolve, reject, isWeiboImage);
-					};
+							// 恢复原始处理器（如果有的话）
+							if (originalOnload) img.onload = originalOnload;
+							if (originalOnerror) img.onerror = originalOnerror;
 
-					// 设置图片源为缓存的base64数据
-					img.src = cachedImage.data;
-					return;
+							// 继续尝试下一个方法
+							await this.tryAdvancedImageLoading(imagePath, img, imageDiv, loadingText, resolve, reject, isWeiboImage);
+						};
+
+						// 设置图片源为缓存的base64数据
+						img.src = cachedImage.data;
+						return;
+					} else {
+						log.debug(() => `缓存未命中，将使用其他方式加载: ${imagePath}`);
+					}
+				} else {
+					log.debug(() => `图片缓存已禁用，跳过缓存检查: ${imagePath}`);
 				}
 
 				// 如果没有缓存，尝试高级加载方法
