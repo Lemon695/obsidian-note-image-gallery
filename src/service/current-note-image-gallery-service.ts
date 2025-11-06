@@ -280,6 +280,23 @@ export class CurrentNoteImageGalleryService extends Modal {
 		};
 	}
 
+	private updateElementPositions() {
+		const container = this.contentEl.querySelector('.image-wall-container');
+		if (!container) return;
+
+		this.imageDataMap.forEach((data) => {
+			const el = data.element;
+			if (el) {
+				const rect = el.getBoundingClientRect();
+				data.position = {
+					top: rect.top + container.scrollTop,
+					bottom: rect.bottom + container.scrollTop,
+					height: rect.height
+				};
+			}
+		});
+	}
+
 	private setupVirtualScroll() {
 		const container = this.contentEl.querySelector('.image-wall-container');
 		if (!container) return;
@@ -287,23 +304,11 @@ export class CurrentNoteImageGalleryService extends Modal {
 		// 视口可见区域的前后缓冲区大小（像素）
 		const BUFFER_SIZE = 1000;
 
-		// 记录各图片元素的位置信息
-		const updateElementPositions = () => {
-			this.imageDataMap.forEach((data) => {
-				const el = data.element;
-				if (el) {
-					const rect = el.getBoundingClientRect();
-					data.position = {
-						top: rect.top + container.scrollTop,
-						bottom: rect.bottom + container.scrollTop,
-						height: rect.height
-					};
-				}
-			});
-		};
+		// 创建绑定的更新函数引用，用于事件监听器
+		const boundUpdateElementPositions = () => this.updateElementPositions();
 
 		// 初始化位置信息
-		setTimeout(updateElementPositions, 500);
+		setTimeout(boundUpdateElementPositions, 500);
 
 		// 滚动时仅渲染可见区域附近的元素
 		const scrollHandler = () => {
@@ -395,7 +400,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 		// 使用ResizeObserver监听容器和图片大小变化
 		const resizeObserver = new ResizeObserver(() => {
-			updateElementPositions();
+			boundUpdateElementPositions();
 			scrollHandler();
 		});
 		resizeObserver.observe(container as Element);
@@ -403,13 +408,13 @@ export class CurrentNoteImageGalleryService extends Modal {
 		// 监听图片加载完成，动态更新布局
 		const imageLoadHandler = () => {
 			setTimeout(() => {
-				updateElementPositions();
+				boundUpdateElementPositions();
 				scrollHandler();
 			}, 50);
 		};
 
 		container.addEventListener('scroll', scrollHandler);
-		window.addEventListener('resize', updateElementPositions);
+		window.addEventListener('resize', boundUpdateElementPositions);
 
 		// 为所有图片添加load事件监听
 		this.imageDataMap.forEach((data) => {
@@ -422,7 +427,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 		this.cleanupVirtualScroll = () => {
 			resizeObserver.disconnect();
 			container.removeEventListener('scroll', scrollHandler);
-			window.removeEventListener('resize', updateElementPositions);
+			window.removeEventListener('resize', boundUpdateElementPositions);
 		};
 	}
 
@@ -474,6 +479,12 @@ export class CurrentNoteImageGalleryService extends Modal {
 			originalOrder.forEach(item => container.appendChild(item));
 			log.debug(() => `恢复默认排序`);
 		}
+
+		// 排序后更新虚拟滚动的位置信息
+		setTimeout(() => {
+			this.updateElementPositions();
+			log.debug(() => `排序后位置信息已更新`);
+		}, 100);
 	}
 
 	private getImageSize(element: Element): number {
@@ -1110,78 +1121,156 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 			const isNetworkImage = imagePath.startsWith('http://') || imagePath.startsWith('https://');
 
-			// 如果是网络图片，先直接设置原始URL开始加载
+			// 对于网络图片，先检查缓存
 			if (isNetworkImage) {
-				// 除非是微博图片，否则先尝试直接加载
-				if (!isWeiboImage) {
-					// 设置crossOrigin允许canvas读取跨域图片
-					img.crossOrigin = 'anonymous';
-					img.src = imagePath;
+				try {
+					if (this.plugin.settings.enableCache) {
+						log.debug(() => `检查图片缓存: ${imagePath}`);
 
-					// 设置加载和错误处理
-					img.onload = () => {
-						this.handleImageLoadSuccess(img, imageDiv, loadingText, imagePath);
-						resolve();
-						return; // 直接加载成功则提前返回
-					};
+						// 异步获取缓存
+						const cachedImage = await this.plugin.imageCacheService.getCachedImage(imagePath);
 
-					// 如果直接加载失败，继续下面的步骤
-					img.onerror = (e) => {
-						log.error(() => `直接加载网络图片失败: ${imagePath}, 尝试高级加载方式`);
-						// 此处不reject，继续尝试其他方法
-					};
-				}
-			}
+						if (cachedImage) {
+							log.info(() => `✓ 缓存命中，从缓存加载: ${imagePath}`);
+							loadingText.setText('从缓存加载...');
 
-			try {
-				if (this.plugin.settings.enableCache) {
-					log.debug(() => `检查图片缓存: ${imagePath}`);
+							img.onload = () => {
+								log.info(() => `✓ 缓存图片加载成功: ${imagePath}`);
+								this.handleImageLoadSuccess(img, imageDiv, loadingText, imagePath);
+								resolve();
+							};
 
-					// 异步获取缓存
-					const cachedImage = await this.plugin.imageCacheService.getCachedImage(imagePath);
+							img.onerror = async (e) => {
+								log.error(() => `✗ 缓存图片加载失败: ${imagePath}, 错误: ${e}`);
+								// 缓存加载失败，尝试网络加载
+								await this.tryNetworkImageLoading(imagePath, img, imageDiv, loadingText, resolve, reject, isWeiboImage);
+							};
 
-					if (cachedImage) {
-						log.info(() => `✓ 缓存命中，从缓存加载: ${imagePath}`);
-						loadingText.setText('从缓存加载...');
-
-						const originalOnload = img.onload;
-						const originalOnerror = img.onerror;
-
-						img.onload = () => {
-							log.info(() => `✓ 缓存图片加载成功: ${imagePath}`);
-							this.handleImageLoadSuccess(img, imageDiv, loadingText, imagePath);
-							resolve();
-						};
-
-						img.onerror = async (e) => {
-							log.error(() => `✗ 缓存图片加载失败: ${imagePath}, 错误: ${e}`);
-
-							// 恢复原始处理器（如果有的话）
-							if (originalOnload) img.onload = originalOnload;
-							if (originalOnerror) img.onerror = originalOnerror;
-
-							// 继续尝试下一个方法
-							await this.tryAdvancedImageLoading(imagePath, img, imageDiv, loadingText, resolve, reject, isWeiboImage);
-						};
-
-						// 设置图片源为缓存的base64数据
-						img.src = cachedImage.data;
-						return;
+							// 设置图片源为缓存的base64数据
+							img.src = cachedImage.data;
+							return;
+						} else {
+							log.info(() => `缓存未命中，从网络加载: ${imagePath}`);
+						}
 					} else {
-						log.info(() => `缓存未命中，从网络加载: ${imagePath}`);
+						log.info(() => `图片缓存已禁用`);
 					}
-				} else {
-					log.info(() => `图片缓存已禁用`);
+				} catch (error) {
+					log.error(() => `获取缓存出错: ${imagePath}`, error);
 				}
 
-				// 如果没有缓存，尝试高级加载方法
-				await this.tryAdvancedImageLoading(imagePath, img, imageDiv, loadingText, resolve, reject, isWeiboImage);
-			} catch (error) {
-				log.error(() => `获取缓存出错: ${imagePath}`, error);
-
+				// 缓存未命中或禁用，尝试网络加载
+				await this.tryNetworkImageLoading(imagePath, img, imageDiv, loadingText, resolve, reject, isWeiboImage);
+			} else {
+				// 本地图片，使用原有逻辑
 				await this.tryAdvancedImageLoading(imagePath, img, imageDiv, loadingText, resolve, reject, isWeiboImage);
 			}
 		});
+	}
+
+	private async tryNetworkImageLoading(
+		imagePath: string,
+		img: HTMLImageElement,
+		imageDiv: HTMLElement,
+		loadingText: HTMLElement,
+		resolve: () => void,
+		reject: (error: unknown) => void,
+		isWeiboImage: boolean
+	): Promise<void> {
+		// 除非是微博图片，否则先尝试直接加载
+		if (!isWeiboImage) {
+			// 设置crossOrigin允许canvas读取跨域图片
+			img.crossOrigin = 'anonymous';
+
+			const directLoadSuccess = await new Promise<boolean>((imgResolve) => {
+				const onload = async () => {
+					log.debug(() => `直接加载网络图片成功: ${imagePath}`);
+					this.handleImageLoadSuccess(img, imageDiv, loadingText, imagePath);
+
+					// 直接加载成功后，尝试缓存图片
+					if (this.plugin.settings.enableCache) {
+						await this.cacheLoadedImage(imagePath, img);
+					}
+
+					resolve();
+					imgResolve(true);
+				};
+
+				const onerror = (e: Event | string) => {
+					log.error(() => `直接加载网络图片失败: ${imagePath}, 尝试高级加载方式`);
+					imgResolve(false);
+				};
+
+				img.onload = onload;
+				img.onerror = onerror;
+				img.src = imagePath;
+
+				// 设置超时
+				setTimeout(() => {
+					if (!img.complete || img.naturalWidth === 0) {
+						onerror('timeout');
+					}
+				}, 5000);
+			});
+
+			if (directLoadSuccess) {
+				return;
+			}
+		}
+
+		// 直接加载失败或是微博图片，使用高级加载方法
+		await this.tryAdvancedImageLoading(imagePath, img, imageDiv, loadingText, resolve, reject, isWeiboImage);
+	}
+
+	private async cacheLoadedImage(imagePath: string, img: HTMLImageElement): Promise<void> {
+		try {
+			// 创建画布来获取图片数据
+			const canvas = document.createElement('canvas');
+			canvas.width = img.naturalWidth;
+			canvas.height = img.naturalHeight;
+
+			const ctx = canvas.getContext('2d');
+			if (!ctx) {
+				log.error(() => `无法创建canvas上下文用于缓存: ${imagePath}`);
+				return;
+			}
+
+			// 绘制图片到画布
+			ctx.drawImage(img, 0, 0);
+
+			// 将画布内容转换为Blob
+			await new Promise<void>((blobResolve) => {
+				canvas.toBlob(async (blob) => {
+					if (!blob) {
+						log.error(() => `无法从画布创建Blob: ${imagePath}`);
+						blobResolve();
+						return;
+					}
+
+					try {
+						log.debug(() => `从直接加载的图片创建缓存: ${imagePath}, 大小: ${Math.round(blob.size / 1024)}KB`);
+
+						// 转换为ArrayBuffer
+						const arrayBuffer = await blob.arrayBuffer();
+
+						// 调用缓存服务
+						await this.plugin.imageCacheService.cacheImage(
+							imagePath,
+							arrayBuffer,
+							undefined,
+							blob.type || 'image/jpeg'
+						);
+
+						log.info(() => `✓ 成功缓存直接加载的图片: ${imagePath}`);
+					} catch (error) {
+						log.error(() => `缓存直接加载的图片失败: ${imagePath}`, error);
+					}
+					blobResolve();
+				}, 'image/jpeg', 0.9);
+			});
+		} catch (error) {
+			log.error(() => `缓存图片过程中出错: ${imagePath}`, error);
+		}
 	}
 
 	private async loadWeiboImage(
