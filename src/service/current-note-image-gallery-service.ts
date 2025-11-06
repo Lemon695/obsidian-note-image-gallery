@@ -51,6 +51,8 @@ export class CurrentNoteImageGalleryService extends Modal {
 	};
 	private resourceManager: ResourceManager;
 	private retryHandler = new RetryHandler(3);
+	private currentSortType: string = 'default';  // 保存当前的排序类型
+	private sortDebounceTimer: number | null = null;  // 排序防抖定时器
 
 	constructor(app: App, plugin: NoteImageGalleryPlugin, images: string[]) {
 		super(app);
@@ -432,6 +434,9 @@ export class CurrentNoteImageGalleryService extends Modal {
 	}
 
 	private sortImages(sortType: string) {
+		// 保存当前的排序类型
+		this.currentSortType = sortType;
+
 		const container = this.contentEl.querySelector('.image-wall');
 		if (!container) return;
 
@@ -441,16 +446,24 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 		// 根据排序类型排序
 		if (sortType === 'size-desc' || sortType === 'size-asc') {
-			// 过滤出已加载的图片
+			// 过滤出已加载的图片（只要naturalWidth > 0就认为已加载，不依赖complete属性）
 			const loadedItems = items.filter(item => {
 				const img = item.querySelector('img');
-				return img && (img as HTMLImageElement).complete && (img as HTMLImageElement).naturalWidth > 0;
+				const imagePath = (item as HTMLElement).getAttribute('data-path');
+				// 关键修改：只检查naturalWidth，不检查complete
+				const isLoaded = img && (img as HTMLImageElement).naturalWidth > 0;
+
+				if (img) {
+					log.debug(() => `检查图片 [${imagePath}]: complete=${(img as HTMLImageElement).complete}, naturalWidth=${(img as HTMLImageElement).naturalWidth}, naturalHeight=${(img as HTMLImageElement).naturalHeight}, isLoaded=${isLoaded}`);
+				}
+
+				return isLoaded;
 			});
 
 			// 未加载的图片
 			const unloadedItems = items.filter(item => {
 				const img = item.querySelector('img');
-				return !img || !(img as HTMLImageElement).complete || (img as HTMLImageElement).naturalWidth === 0;
+				return !img || (img as HTMLImageElement).naturalWidth === 0;
 			});
 
 			log.debug(() => `已加载图片: ${loadedItems.length}, 未加载图片: ${unloadedItems.length}`);
@@ -1052,7 +1065,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 	}
 
 	private handleImageLoadSuccess(img: HTMLImageElement, imageDiv: HTMLElement, loadingText: HTMLElement, imagePath: string): void {
-		log.debug(() => `图片加载成功处理: ${imagePath}, 宽度: ${img.naturalWidth}, 高度: ${img.naturalHeight}`);
+		log.debug(() => `图片加载成功处理: ${imagePath}, 宽度: ${img.naturalWidth}, 高度: ${img.naturalHeight}, complete: ${img.complete}`);
 
 		if (loadingText && loadingText.parentNode) {
 			loadingText.remove();
@@ -1102,6 +1115,18 @@ export class CurrentNoteImageGalleryService extends Modal {
 		const imageData = this.imageDataMap.get(imagePath);
 		if (imageData) {
 			imageData.isLoading = false;
+		}
+
+		// 如果当前有非默认的排序选项，使用防抖延迟重新应用排序
+		if (this.currentSortType !== 'default') {
+			if (this.sortDebounceTimer !== null) {
+				clearTimeout(this.sortDebounceTimer);
+			}
+			this.sortDebounceTimer = window.setTimeout(() => {
+				log.debug(() => `防抖延迟结束，执行自动排序，类型: ${this.currentSortType}`);
+				this.sortImages(this.currentSortType);
+				this.sortDebounceTimer = null;
+			}, 1000);  // 增加延迟到1000ms，给图片更多时间加载
 		}
 	}
 
