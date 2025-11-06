@@ -8,6 +8,14 @@ export enum LogLevel {
 	NONE = 4
 }
 
+export enum LogCategory {
+	CACHE = 'CACHE',
+	LOADING = 'LOADING',
+	UI = 'UI',
+	NETWORK = 'NETWORK',
+	GENERAL = 'GENERAL'
+}
+
 /**
  * 日志工具类，支持通过配置控制调试模式
  */
@@ -15,6 +23,7 @@ export class Logger {
 	private readonly pluginName: string;
 	private logLevel: LogLevel;
 	private debugMode: boolean;
+	private enabledCategories: Set<LogCategory>;
 
 	/**
 	 * 创建日志工具实例
@@ -26,9 +35,18 @@ export class Logger {
 		this.pluginName = pluginName;
 		this.logLevel = logLevel;
 		this.debugMode = debugMode;
+		this.enabledCategories = new Set(Object.values(LogCategory));
 
 		// 输出初始化信息
 		this.info(`日志系统初始化: 级别=${LogLevel[logLevel]}, 调试模式=${debugMode}`);
+	}
+
+	setEnabledCategories(categories: LogCategory[]): void {
+		this.enabledCategories = new Set(categories);
+	}
+
+	private isCategoryEnabled(category: LogCategory): boolean {
+		return this.enabledCategories.has(category);
 	}
 
 	/**
@@ -54,11 +72,11 @@ export class Logger {
 	 * 输出调试级别日志
 	 * @param message 日志消息或返回日志消息的函数
 	 */
-	public debug(message: string | (() => string)): void {
+	public debug(message: string | (() => string), category: LogCategory = LogCategory.GENERAL): void {
 		// 当调试模式开启或日志级别设置为DEBUG时显示调试日志
-		if (this.debugMode || this.logLevel <= LogLevel.DEBUG) {
+		if ((this.debugMode || this.logLevel <= LogLevel.DEBUG) && this.isCategoryEnabled(category)) {
 			const finalMessage = typeof message === 'function' ? message() : message;
-			console.log(`[${this.pluginName}] [DEBUG] ${finalMessage}`);
+			console.log(`[${this.pluginName}] [DEBUG] [${category}] ${finalMessage}`);
 		}
 	}
 

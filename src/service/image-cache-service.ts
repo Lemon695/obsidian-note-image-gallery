@@ -266,7 +266,7 @@ export class ImageCacheService {
 			}
 
 			// 保存索引
-			await this.saveCacheIndex();
+			this.debouncedSaveCacheIndex(5000);  // 使用已有的防抖方法，5秒后保存
 
 			log.debug(() => `成功缓存图片: ${url}, 总缓存大小: ${Math.round(this.totalCacheSize / 1024 / 1024)}MB`);
 		} catch (error) {
@@ -381,15 +381,29 @@ export class ImageCacheService {
 				size: entry.size,
 				accessCount: entry.accessCount || 0,
 				lastAccessed: entry.lastAccessed || entry.timestamp,
-				score:0
+				score: 0
 			}));
 
 			// 计算优先级分数 (较低的分数会先被删除)
-			// 公式: 访问次数 * 10 + 最近访问时间的新鲜度 + 文件大小的惩罚
+			// LFU+LRU混合算法
 			validEntries.forEach(entry => {
-				const recencyScore = Math.min(10, (now - entry.lastAccessed) / (1000 * 60 * 60 * 24)); // 最多10天
-				const sizeScore = Math.min(5, entry.size / (1024 * 1024)); // 超过5MB开始惩罚
-				entry['score'] = (entry.accessCount * 10) + (10 - recencyScore) - sizeScore;
+				const daysSinceAccess = (now - entry.lastAccessed) / (1000 * 60 * 60 * 24);
+				const daysSinceCreation = (now - entry.timestamp) / (1000 * 60 * 60 * 24);
+
+				// 频率得分：使用对数避免极端值
+				const frequencyScore = Math.log2(entry.accessCount + 1) * 15;
+
+				// 时效得分：使用指数衰减
+				const recencyScore = Math.exp(-daysSinceAccess / 7) * 25; // 7天半衰期
+
+				// 大小惩罚：平方根增长
+				const sizeMB = entry.size / (1024 * 1024);
+				const sizePenalty = Math.sqrt(sizeMB) * 4;
+
+				// 年龄惩罚：缓存时间越久，价值越低
+				const agePenalty = Math.min(15, daysSinceCreation / 3);
+
+				entry['score'] = frequencyScore + recencyScore - sizePenalty - agePenalty;
 			});
 
 			// 按分数排序 (低分优先删除)
@@ -669,7 +683,7 @@ export class ImageCacheService {
 		try {
 			// 方法1: 如果适配器有list方法（可能不是所有适配器都有）
 			if (typeof this.app.vault.adapter.list === 'function') {
-				const { files } = await this.app.vault.adapter.list(this.cacheDir);
+				const {files} = await this.app.vault.adapter.list(this.cacheDir);
 				return files.map(filePath => {
 					// 从完整路径中提取文件名
 					const parts = filePath.split('/');

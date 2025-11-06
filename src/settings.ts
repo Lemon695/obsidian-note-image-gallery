@@ -1,4 +1,4 @@
-import {App, PluginSettingTab, Setting} from 'obsidian';
+import {App, Notice, PluginSettingTab, Setting} from 'obsidian';
 import NoteImageGalleryPlugin from './main';
 import {log, LogLevel} from './utils/log-utils';
 
@@ -8,6 +8,8 @@ export interface Settings {
 	maxCacheSize: number; // MB
 
 	debugMode: boolean;
+
+	logLevel: 'debug' | 'info' | 'warn' | 'error';  // 添加日志级别设置
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -16,6 +18,7 @@ export const DEFAULT_SETTINGS: Settings = {
 	maxCacheSize: 100,
 
 	debugMode: false,
+	logLevel: 'info',  // 默认info级别
 };
 
 export class NoteImageGallerySettingTab extends PluginSettingTab {
@@ -51,6 +54,11 @@ export class NoteImageGallerySettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.maxCacheAge)
 				.setDynamicTooltip()
 				.onChange(async (value) => {
+					if (value < 1 || value > 30 || !Number.isInteger(value)) {
+						new Notice('缓存有效期必须在1-30天之间');
+						return;
+					}
+
 					this.plugin.settings.maxCacheAge = value;
 					await this.plugin.saveSettings();
 					this.plugin.imageCacheService.setMaxCacheAge(value * 24 * 60 * 60 * 1000);
@@ -74,9 +82,12 @@ export class NoteImageGallerySettingTab extends PluginSettingTab {
 			const cacheSize = this.plugin.imageCacheService.getCacheSize();
 			if (typeof cacheSize === 'number' && !isNaN(cacheSize) && cacheSize > 0) {
 				cacheSizeInMB = (cacheSize / (1024 * 1024)).toFixed(2);
+			} else {
+				log.debug(() => '缓存大小为0或无效');
 			}
 		} catch (e) {
 			log.error("获取缓存大小失败:", e);
+			new Notice('无法获取缓存大小，请尝试重新初始化缓存');
 		}
 
 		containerEl.createEl('h3', {text: '缓存状态'});

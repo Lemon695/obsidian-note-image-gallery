@@ -3,7 +3,7 @@ import {DEFAULT_SETTINGS, Settings, NoteImageGallerySettingTab} from './settings
 import {CurrentNoteImageGalleryService} from "./service/current-note-image-gallery-service";
 import {ImageCacheService} from './service/image-cache-service';
 import {ImageExtractorService} from "./service/image-extractor-service";
-import { Logger, LogLevel, createLogger, log } from './utils/log-utils';
+import {Logger, LogLevel, createLogger, log} from './utils/log-utils';
 import {ObsidianImageLoader} from "./service/obsidian-image-loader";
 
 export default class NoteImageGalleryPlugin extends Plugin {
@@ -101,12 +101,12 @@ export default class NoteImageGalleryPlugin extends Plugin {
 		return await this.app.vault.read(file);
 	}
 
-	onunload() {
+	async onunload() {
 		// 确保缓存索引保存到磁盘
 		if (this.imageCacheService) {
-			// 无需等待，只是尝试保存
 			try {
-				this.imageCacheService.saveCacheIndex?.();
+				await this.imageCacheService.saveCacheIndex();
+				log.debug(() => '缓存索引已保存');
 			} catch (e) {
 				log.error('保存缓存索引失败:', e);
 			}
