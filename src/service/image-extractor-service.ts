@@ -108,9 +108,50 @@ export class ImageExtractorService {
 		// 使用所有提取器提取图片
 		const allImages = this.extractors
 			.flatMap(extractor => extractor.extract(content))
-			.filter(Boolean); // 移除空值
+			.filter(Boolean) // 移除空值
+			.filter(path => this.isLikelyImageUrl(path)); // 过滤掉明显不是图片的URL
 
 		// 去重并返回结果
 		return [...new Set(allImages)];
+	}
+
+	/**
+	 * 检查URL是否可能是图片
+	 * @param path 图片路径或URL
+	 * @returns 是否可能是图片
+	 */
+	private isLikelyImageUrl(path: string): boolean {
+		// 本地路径直接返回true（由Obsidian处理验证）
+		if (!path.startsWith('http://') && !path.startsWith('https://')) {
+			return true;
+		}
+
+		// 网络URL：检查是否以常见图片扩展名结尾（忽略查询参数）
+		const urlWithoutParams = path.split('?')[0].split('#')[0];
+		const imageExtensions = /\.(jpg|jpeg|png|gif|webp|bmp|svg|tiff?|ico|avif)$/i;
+
+		// 如果URL路径包含明显的图片扩展名，认为是图片
+		if (imageExtensions.test(urlWithoutParams)) {
+			return true;
+		}
+
+		// 检查URL路径的最后一部分
+		const pathParts = urlWithoutParams.split('/');
+		const lastPart = pathParts[pathParts.length - 1];
+
+		// 如果最后一部分看起来像文件名（包含.），检查扩展名
+		if (lastPart.includes('.')) {
+			return imageExtensions.test(lastPart);
+		}
+
+		// Twitter/X 特殊处理：pbs.twimg.com 的图片URL可能没有扩展名
+		// 但通常包含 /media/ 路径且有 format 参数
+		if (path.includes('pbs.twimg.com/media/') && path.includes('format=')) {
+			return true;
+		}
+
+		// 其他情况：如果没有明确的图片扩展名，且不是特殊图床，则不认为是图片
+		// 这会过滤掉如 x.com/status/... 这样的链接
+		return false;
 	}
 }

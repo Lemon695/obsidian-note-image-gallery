@@ -507,12 +507,33 @@ export class ImageCacheService {
 	 */
 	private getFileExtension(url: string): string {
 		try {
-			// 移除URL中的查询参数
-			const urlWithoutParams = url.split('?')[0];
-			// 获取最后一个.之后的内容作为扩展名
-			const parts = urlWithoutParams.split('.');
-			if (parts.length > 1) {
-				return parts[parts.length - 1].toLowerCase();
+			// 移除URL中的查询参数和片段标识
+			const urlWithoutParams = url.split('?')[0].split('#')[0];
+
+			// 从URL路径中提取文件名部分（最后一个/之后的内容）
+			const pathParts = urlWithoutParams.split('/');
+			const filename = pathParts[pathParts.length - 1];
+
+			// 从文件名中提取扩展名（最后一个.之后的内容）
+			const dotIndex = filename.lastIndexOf('.');
+			if (dotIndex > 0 && dotIndex < filename.length - 1) {
+				const ext = filename.substring(dotIndex + 1).toLowerCase();
+				// 确保扩展名不包含特殊字符（只允许字母和数字）
+				if (/^[a-z0-9]+$/i.test(ext)) {
+					return ext;
+				}
+			}
+
+			// 特殊处理：Twitter图片URL可能通过查询参数指定格式
+			// 例如：?format=jpg 或 ?format=png
+			if (url.includes('format=')) {
+				const formatMatch = url.match(/format=([a-z]+)/i);
+				if (formatMatch && formatMatch[1]) {
+					const format = formatMatch[1].toLowerCase();
+					if (['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(format)) {
+						return format === 'jpg' ? 'jpeg' : format;
+					}
+				}
 			}
 		} catch (e) {
 			log.error(() => `Error extracting file extension:`, e);
@@ -651,6 +672,10 @@ export class ImageCacheService {
 			// 查找孤立文件（目录中存在但索引中没有的文件）
 			const orphanedFiles: string[] = [];
 			for (const filename of cacheFiles) {
+				// 跳过 index.json 文件，它是索引文件，不是缓存图片
+				if (filename === 'index.json') {
+					continue;
+				}
 				if (!validFilenames.has(filename)) {
 					orphanedFiles.push(filename);
 				}

@@ -67,22 +67,6 @@ export class NoteImageGallerySettingTab extends PluginSettingTab {
 					cacheAgeSetting.setDesc(`图片缓存的最大有效期: ${value} 天`);
 				}));
 
-		const cacheSizeSetting = new Setting(containerEl)
-			.setName('最大缓存大小')
-			.setDesc(`图片缓存的最大大小: ${this.plugin.settings.maxCacheSize} MB`)
-			.addSlider(slider => slider
-				.setLimits(10, 300, 5)
-				.setValue(this.plugin.settings.maxCacheSize)
-				.setDynamicTooltip()
-				.onChange(async (value) => {
-					this.plugin.settings.maxCacheSize = value;
-					await this.plugin.saveSettings();
-					this.plugin.imageCacheService.setMaxCacheSize(value * 1024 * 1024);
-
-					// 更新描述显示当前值
-					cacheSizeSetting.setDesc(`图片缓存的最大大小: ${value} MB`);
-				}));
-
 		let cacheSizeInMB = "0.00";
 		try {
 			const cacheSize = this.plugin.imageCacheService.getCacheSize();
@@ -100,6 +84,26 @@ export class NoteImageGallerySettingTab extends PluginSettingTab {
 		const cacheStatusEl = containerEl.createEl('p', {
 			text: `当前缓存大小: ${cacheSizeInMB} MB / ${this.plugin.settings.maxCacheSize} MB`
 		});
+
+		const cacheSizeSetting = new Setting(containerEl)
+			.setName('最大缓存大小')
+			.setDesc(`图片缓存的最大大小: ${this.plugin.settings.maxCacheSize} MB`)
+			.addSlider(slider => slider
+				.setLimits(10, 300, 5)
+				.setValue(this.plugin.settings.maxCacheSize)
+				.setDynamicTooltip()
+				.onChange(async (value) => {
+					this.plugin.settings.maxCacheSize = value;
+					await this.plugin.saveSettings();
+					this.plugin.imageCacheService.setMaxCacheSize(value * 1024 * 1024);
+
+					// 更新描述显示当前值
+					cacheSizeSetting.setDesc(`图片缓存的最大大小: ${value} MB`);
+
+					// 更新缓存状态显示中的最大缓存大小
+					const currentCacheSize = (this.plugin.imageCacheService.getCacheSize() / (1024 * 1024)).toFixed(2);
+					cacheStatusEl.setText(`当前缓存大小: ${currentCacheSize} MB / ${value} MB`);
+				}));
 
 		new Setting(containerEl)
 			.setName('刷新缓存状态')

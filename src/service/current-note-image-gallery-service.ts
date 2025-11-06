@@ -432,17 +432,48 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 		const items = Array.from(container.querySelectorAll('.image-item'));
 
+		log.debug(() => `开始排序图片，总数: ${items.length}, 排序类型: ${sortType}`);
+
 		// 根据排序类型排序
 		if (sortType === 'size-desc' || sortType === 'size-asc') {
-			items.sort((a, b) => {
+			// 过滤出已加载的图片
+			const loadedItems = items.filter(item => {
+				const img = item.querySelector('img');
+				return img && (img as HTMLImageElement).complete && (img as HTMLImageElement).naturalWidth > 0;
+			});
+
+			// 未加载的图片
+			const unloadedItems = items.filter(item => {
+				const img = item.querySelector('img');
+				return !img || !(img as HTMLImageElement).complete || (img as HTMLImageElement).naturalWidth === 0;
+			});
+
+			log.debug(() => `已加载图片: ${loadedItems.length}, 未加载图片: ${unloadedItems.length}`);
+
+			// 对已加载的图片按尺寸排序
+			loadedItems.sort((a, b) => {
 				const aSize = this.getImageSize(a);
 				const bSize = this.getImageSize(b);
+				log.debug(() => `比较图片尺寸 - A: ${aSize}, B: ${bSize}`);
 				return sortType === 'size-desc' ? bSize - aSize : aSize - bSize;
 			});
-		}
 
-		// 重新排列DOM
-		items.forEach(item => container.appendChild(item));
+			// 先添加已排序的图片，再添加未加载的图片
+			loadedItems.forEach(item => container.appendChild(item));
+			unloadedItems.forEach(item => container.appendChild(item));
+
+			log.debug(() => `排序完成，已重新排列 ${loadedItems.length} 张已加载图片`);
+		} else {
+			// 默认排序：恢复原始顺序（按照imageDataMap的顺序）
+			const originalOrder: HTMLElement[] = [];
+			this.imageDataMap.forEach((data) => {
+				if (items.includes(data.element as HTMLElement)) {
+					originalOrder.push(data.element as HTMLElement);
+				}
+			});
+			originalOrder.forEach(item => container.appendChild(item));
+			log.debug(() => `恢复默认排序`);
+		}
 	}
 
 	private getImageSize(element: Element): number {
@@ -451,7 +482,14 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 		const width = (img as HTMLImageElement).naturalWidth || 0;
 		const height = (img as HTMLImageElement).naturalHeight || 0;
-		return width * height;
+		const size = width * height;
+
+		// 只在图片实际加载时记录尺寸
+		if (size > 0) {
+			log.debug(() => `图片尺寸: ${width}x${height} = ${size}`);
+		}
+
+		return size;
 	}
 
 	private filterImages(filterType: string) {
@@ -671,8 +709,8 @@ export class CurrentNoteImageGalleryService extends Modal {
 	): Promise<void> {
 		try {
 			const controller = new AbortController();
-			// 减少超时时间
-			const timeoutId = setTimeout(() => controller.abort(), 2000);
+			// 增加超时时间到15秒，给大图片更多加载时间
+			const timeoutId = setTimeout(() => controller.abort(), 15000);
 
 			const fetchOptions: RequestInit = {
 				method: 'GET',
@@ -723,7 +761,8 @@ export class CurrentNoteImageGalleryService extends Modal {
 				const contentType = blob.type || response.headers.get('content-type') || 'image/jpeg';
 				const etag = response.headers.get('etag');
 
-				log.debug(() => `正在缓存图片: ${imagePath}, 类型: ${contentType}`);
+				log.info(() => `开始缓存网络图片: ${imagePath}`);
+				log.debug(() => `缓存详情 - 类型: ${contentType}, 大小: ${Math.round(blob.size / 1024)}KB`);
 
 				const arrayBuffer = await blob.arrayBuffer();
 
@@ -734,9 +773,9 @@ export class CurrentNoteImageGalleryService extends Modal {
 						etag || undefined,
 						contentType
 					);
-					log.debug(() => `成功缓存图片: ${imagePath}`);
+					log.info(() => `✓ 网络图片缓存成功: ${imagePath}`);
 				} catch (cacheError) {
-					log.error(() => `缓存图片失败: ${imagePath}`, cacheError);
+					log.error(() => `✗ 网络图片缓存失败: ${imagePath}`, cacheError);
 				}
 			} catch (error) {
 				log.error(() => '缓存图片过程中出错:', error);
@@ -782,34 +821,47 @@ export class CurrentNoteImageGalleryService extends Modal {
 				ctx.drawImage(imageElement, 0, 0);
 
 				// 将画布内容转换为Blob
-				canvas.toBlob(async (blob) => {
-					if (!blob) {
-						log.error(() => `无法从画布创建Blob: ${imagePath}`);
-						return;
+				// 注意：如果canvas被污染(tainted)，toBlob会失败
+				try {
+					canvas.toBlob(async (blob) => {
+						if (!blob) {
+							log.error(() => `无法从画布创建Blob: ${imagePath}`);
+							return;
+						}
+
+						try {
+							log.debug(() => `从直接加载的图片创建缓存: ${imagePath}, 大小: ${Math.round(blob.size / 1024)}KB`);
+
+							// 转换为ArrayBuffer
+							const arrayBuffer = await blob.arrayBuffer();
+
+							// 调用缓存服务
+							await this.plugin.imageCacheService.cacheImage(
+								imagePath,
+								arrayBuffer,
+								undefined,
+								blob.type || 'image/jpeg'
+							);
+
+							log.debug(() => `成功缓存直接加载的图片: ${imagePath}`);
+						} catch (error) {
+							const errorMsg = error instanceof Error ? error.message : String(error);
+							log.error(() => `缓存直接加载的图片失败: ${imagePath}, 错误: ${errorMsg}`, error instanceof Error ? error : undefined);
+						}
+					}, 'image/jpeg', 0.95); // 使用JPEG格式，95%质量
+				} catch (blobError) {
+					// 捕获SecurityError (canvas被污染时)
+					if (blobError instanceof DOMException && blobError.name === 'SecurityError') {
+						log.debug(() => `跨域图片无法通过canvas缓存（CORS限制）: ${imagePath}`);
+					} else {
+						throw blobError;
 					}
-
-					try {
-						log.debug(() => `从直接加载的图片创建缓存: ${imagePath}, 大小: ${Math.round(blob.size / 1024)}KB`);
-
-						// 转换为ArrayBuffer
-						const arrayBuffer = await blob.arrayBuffer();
-
-						// 调用缓存服务
-						await this.plugin.imageCacheService.cacheImage(
-							imagePath,
-							arrayBuffer,
-							undefined,
-							blob.type || 'image/jpeg'
-						);
-
-						log.debug(() => `成功缓存直接加载的图片: ${imagePath}`);
-					} catch (error) {
-						const errorMsg = error instanceof Error ? error.message : String(error);
-						log.error(() => `缓存直接加载的图片失败: ${imagePath}, 错误: ${errorMsg}`, error instanceof Error ? error : undefined);
-					}
-				}, 'image/jpeg', 0.95); // 使用JPEG格式，95%质量
+				}
 			} catch (error) {
-				log.error(() => `设置图片缓存时出错: ${imagePath}`, error);
+				// 只记录非SecurityError的错误
+				if (!(error instanceof DOMException && error.name === 'SecurityError')) {
+					log.error(() => `设置图片缓存时出错: ${imagePath}`, error);
+				}
 			}
 		};
 
@@ -903,6 +955,9 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 		// 所有其他情况：直接设置src
 		if (imagePath.startsWith('http://') || imagePath.startsWith('https://')) {
+			// 设置crossOrigin允许canvas读取跨域图片（用于缓存）
+			// 如果服务器不支持CORS，图片仍能加载，但canvas会被污染
+			img.crossOrigin = 'anonymous';
 			img.src = imagePath;
 		} else {
 			// 本地图片
@@ -1059,6 +1114,8 @@ export class CurrentNoteImageGalleryService extends Modal {
 			if (isNetworkImage) {
 				// 除非是微博图片，否则先尝试直接加载
 				if (!isWeiboImage) {
+					// 设置crossOrigin允许canvas读取跨域图片
+					img.crossOrigin = 'anonymous';
 					img.src = imagePath;
 
 					// 设置加载和错误处理
@@ -1084,20 +1141,20 @@ export class CurrentNoteImageGalleryService extends Modal {
 					const cachedImage = await this.plugin.imageCacheService.getCachedImage(imagePath);
 
 					if (cachedImage) {
-						log.debug(() => `缓存命中，从缓存加载图片: ${imagePath}`);
+						log.info(() => `✓ 缓存命中，从缓存加载: ${imagePath}`);
 						loadingText.setText('从缓存加载...');
 
 						const originalOnload = img.onload;
 						const originalOnerror = img.onerror;
 
 						img.onload = () => {
-							log.debug(() => `缓存图片加载成功: ${imagePath}`);
+							log.info(() => `✓ 缓存图片加载成功: ${imagePath}`);
 							this.handleImageLoadSuccess(img, imageDiv, loadingText, imagePath);
 							resolve();
 						};
 
 						img.onerror = async (e) => {
-							log.error(() => `缓存图片加载失败: ${imagePath}, 错误: ${e}`);
+							log.error(() => `✗ 缓存图片加载失败: ${imagePath}, 错误: ${e}`);
 
 							// 恢复原始处理器（如果有的话）
 							if (originalOnload) img.onload = originalOnload;
@@ -1111,10 +1168,10 @@ export class CurrentNoteImageGalleryService extends Modal {
 						img.src = cachedImage.data;
 						return;
 					} else {
-						log.debug(() => `缓存未命中，将使用其他方式加载: ${imagePath}`);
+						log.info(() => `缓存未命中，从网络加载: ${imagePath}`);
 					}
 				} else {
-					log.debug(() => `图片缓存已禁用，跳过缓存检查: ${imagePath}`);
+					log.info(() => `图片缓存已禁用`);
 				}
 
 				// 如果没有缓存，尝试高级加载方法
@@ -1585,6 +1642,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 				img.src = imageData.objectUrl;
 			} else if (imagePath.startsWith('http://') || imagePath.startsWith('https://')) {
 				// 使用直接 URL
+				img.crossOrigin = 'anonymous';
 				img.src = imagePath;
 			} else {
 				const newPath = this.getLinkPath(this.images[currentIndex]);
