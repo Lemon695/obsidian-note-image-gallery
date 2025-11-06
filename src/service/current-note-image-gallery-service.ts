@@ -4,9 +4,14 @@ import {log} from "../utils/log-utils";
 import {RetryHandler} from "../utils/retry-handler";
 import {ResourceManager} from "../utils/resource-manager";
 
+// 定义Electron请求接口（用于向后兼容）
+interface ElectronRequest {
+	abort(): void;
+}
+
 interface ImageRequest {
 	controller?: AbortController;
-	electronRequest?: any;
+	electronRequest?: ElectronRequest;
 	timestamp: number;
 }
 
@@ -608,7 +613,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 		imageDiv: HTMLElement,
 		loadingText: HTMLElement,
 		resolve: () => void,
-		reject: (error: any) => void,
+		reject: (error: unknown) => void,
 		isWeiboImage: boolean = false
 	): Promise<void> {
 		let isNetworkImage = false;
@@ -661,7 +666,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 		imageDiv: HTMLElement,
 		loadingText: HTMLElement,
 		resolve: () => void,
-		reject: (error: any) => void,
+		reject: (error: unknown) => void,
 		isWeiboImage: boolean = false
 	): Promise<void> {
 		try {
@@ -749,7 +754,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 		imageDiv: HTMLElement,
 		loadingText: HTMLElement,
 		resolve: () => void,
-		reject: (error: any) => void,
+		reject: (error: unknown) => void,
 		isWeiboImage: boolean = false
 	): void {
 		log.debug(() => `直接加载图片: ${imagePath}`);
@@ -799,7 +804,8 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 						log.debug(() => `成功缓存直接加载的图片: ${imagePath}`);
 					} catch (error) {
-						log.error(() => `缓存直接加载的图片失败: ${imagePath}, 错误: ${error.message}`, error);
+						const errorMsg = error instanceof Error ? error.message : String(error);
+						log.error(() => `缓存直接加载的图片失败: ${imagePath}, 错误: ${errorMsg}`, error instanceof Error ? error : undefined);
 					}
 				}, 'image/jpeg', 0.95); // 使用JPEG格式，95%质量
 			} catch (error) {
@@ -851,7 +857,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 						'Referer': 'https://weibo.com/',
 						'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
 					}
-				}).then(async (response: { arrayBuffer: any; headers: { [x: string]: string; }; }) => {
+				}).then(async (response: { arrayBuffer: ArrayBuffer; headers: { [x: string]: string; }; }) => {
 					try {
 						const arrayBuffer = response.arrayBuffer;
 						const blob = new Blob([arrayBuffer], {type: response.headers['content-type'] || 'image/jpeg'});
@@ -1168,7 +1174,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 		loadingText: HTMLElement,
 		retryCount: number,
 		resolve: () => void,
-		reject: (error: any) => void
+		reject: (error: unknown) => void
 	): Promise<void> {
 		// 使用 Obsidian 的 requestUrl API 代替 electron.remote
 		const {requestUrl} = require('obsidian');

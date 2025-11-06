@@ -46,35 +46,41 @@ export class NoteImageGallerySettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
-		new Setting(containerEl)
+		const cacheAgeSetting = new Setting(containerEl)
 			.setName('缓存有效期')
-			.setDesc('图片缓存的最大有效期（天）')
+			.setDesc(`图片缓存的最大有效期: ${this.plugin.settings.maxCacheAge} 天`)
 			.addSlider(slider => slider
-				.setLimits(1, 30, 1)
+				.setLimits(1, 60, 1)
 				.setValue(this.plugin.settings.maxCacheAge)
 				.setDynamicTooltip()
 				.onChange(async (value) => {
-					if (value < 1 || value > 30 || !Number.isInteger(value)) {
-						new Notice('缓存有效期必须在1-30天之间');
+					if (value < 1 || value > 60 || !Number.isInteger(value)) {
+						new Notice('缓存有效期必须在1-60天之间');
 						return;
 					}
 
 					this.plugin.settings.maxCacheAge = value;
 					await this.plugin.saveSettings();
 					this.plugin.imageCacheService.setMaxCacheAge(value * 24 * 60 * 60 * 1000);
+
+					// 更新描述显示当前值
+					cacheAgeSetting.setDesc(`图片缓存的最大有效期: ${value} 天`);
 				}));
 
-		new Setting(containerEl)
+		const cacheSizeSetting = new Setting(containerEl)
 			.setName('最大缓存大小')
-			.setDesc('图片缓存的最大大小（MB）')
+			.setDesc(`图片缓存的最大大小: ${this.plugin.settings.maxCacheSize} MB`)
 			.addSlider(slider => slider
-				.setLimits(10, 200, 5)
+				.setLimits(10, 300, 5)
 				.setValue(this.plugin.settings.maxCacheSize)
 				.setDynamicTooltip()
 				.onChange(async (value) => {
 					this.plugin.settings.maxCacheSize = value;
 					await this.plugin.saveSettings();
 					this.plugin.imageCacheService.setMaxCacheSize(value * 1024 * 1024);
+
+					// 更新描述显示当前值
+					cacheSizeSetting.setDesc(`图片缓存的最大大小: ${value} MB`);
 				}));
 
 		let cacheSizeInMB = "0.00";
