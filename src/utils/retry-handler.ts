@@ -17,7 +17,7 @@ export class RetryHandler {
 	): Promise<T> {
 		let lastError: Error | null = null;
 
-		for (let attempt = 0; attempt <= this.maxRetries; attempt) {
+		for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
 			try {
 				return await operation();
 			} catch (error) {
@@ -26,6 +26,8 @@ export class RetryHandler {
 				if (attempt < this.maxRetries) {
 					log.debug(() => `${context || '操作'} 失败，重试 ${attempt + 1}/${this.maxRetries}`);
 					this.onRetry?.(attempt + 1);
+					// 添加指数退避延迟，避免立即重试
+					await new Promise(resolve => setTimeout(resolve, Math.min(1000 * Math.pow(2, attempt), 5000)));
 				} else {
 					log.error(() => `${context || '操作'} 达到最大重试次数`, error as Error);
 					this.onFinalFailure?.(error as Error);

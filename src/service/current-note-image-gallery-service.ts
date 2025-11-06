@@ -190,24 +190,35 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 					log.debug(() => `队列处理图片: ${path}, 是否网络图片: ${isNetworkImage}, 是否微博图片: ${isWeiboImage}, 当前活跃加载: ${activeLoads}`);
 
-					try {
-						await this.retryHandler.execute(
-							async () => {
-								const imgEl = imageData.element.querySelector('img') || imageData.element.createEl('img');
-								const loadingTextEl = imageData.element.querySelector('.loading-text') ||
-									imageData.element.createDiv('loading-text');
-								loadingTextEl.setText('加载中...');
+					// 异步执行加载操作，确保 activeLoads 计数器正确管理
+					(async () => {
+						try {
+							await this.retryHandler.execute(
+								async () => {
+									const imgEl = imageData.element.querySelector('img') || imageData.element.createEl('img');
+									const loadingTextEl = imageData.element.querySelector('.loading-text') ||
+										imageData.element.createDiv('loading-text');
+									loadingTextEl.setText('加载中...');
 
-								await this.loadImageUnified(path, imgEl as HTMLImageElement, imageData.element, loadingTextEl as HTMLElement, isWeiboImage);
-							},
-							`加载图片 ${path}`
-						);
-					} catch (error) {
-						imageData.hasError = true;
-						this.handleImageError(imageData.element, '加载失败');
-						this.loadedImages++;
-						this.updateProgressBar();
-					}
+									await this.loadImageUnified(path, imgEl as HTMLImageElement, imageData.element, loadingTextEl as HTMLElement, isWeiboImage);
+								},
+								`加载图片 ${path}`
+							);
+						} catch (error) {
+							imageData.hasError = true;
+							this.handleImageError(imageData.element, '加载失败');
+							this.loadedImages++;
+							this.updateProgressBar();
+						} finally {
+							// 确保无论成功或失败都减少计数器
+							activeLoads--;
+							imageData.isLoading = false;
+							log.debug(() => `图片处理完成: ${path}, 当前活跃加载: ${activeLoads}`);
+
+							// 继续处理队列
+							setTimeout(processQueue, 0);
+						}
+					})();
 				}
 			} finally {
 				isProcessingQueue = false;
@@ -825,74 +836,62 @@ export class CurrentNoteImageGalleryService extends Modal {
 			reject(e);
 		};
 
-		// 如果是微博图片，尝试使用Electron API
-		if (isWeiboImage && typeof require === 'function') {
+		// 如果是微博图片，尝试使用 Obsidian 的 requestUrl API
+		if (isWeiboImage) {
 			try {
-				const electron = require('electron');
-				if (electron && electron.remote && electron.remote.net) {
-					const request = electron.remote.net.request({
-						url: imagePath,
-						headers: {
-							'Referer': 'https://weibo.com/',
-							'Cache-Control': 'no-cache',
-							'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+				// 使用 Obsidian 的 requestUrl API 代替 electron.remote
+				const {requestUrl} = require('obsidian');
+
+				log.debug(() => `使用 Obsidian requestUrl 加载微博图片: ${imagePath}`);
+
+				requestUrl({
+					url: imagePath,
+					method: 'GET',
+					headers: {
+						'Referer': 'https://weibo.com/',
+						'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+					}
+				}).then(async (response: { arrayBuffer: any; headers: { [x: string]: string; }; }) => {
+					try {
+						const arrayBuffer = response.arrayBuffer;
+						const blob = new Blob([arrayBuffer], {type: response.headers['content-type'] || 'image/jpeg'});
+						const objectUrl = this.resourceManager.createObjectURL(imagePath, blob);
+
+						img.src = objectUrl;
+
+						const imageData = this.imageDataMap.get(imagePath);
+						if (imageData) {
+							imageData.objectUrl = objectUrl;
 						}
-					});
 
-					const imageData: Buffer[] = [];
+						// 尝试缓存图片
+						try {
+							const contentType = response.headers['content-type'] || 'image/jpeg';
+							log.debug(() => `缓存从 requestUrl 获取的微博图片: ${imagePath}, 类型: ${contentType}`);
 
-					request.on('response', (response: import('electron').IncomingMessage) => {
-						response.on('data', (chunk: Buffer) => {
-							imageData.push(chunk);
-						});
+							await this.plugin.imageCacheService.cacheImage(
+								imagePath,
+								arrayBuffer,
+								undefined,
+								contentType
+							);
 
-						response.on('end', async () => {
-							try {
-								const buffer = Buffer.concat(imageData);
-								const blob = new Blob([buffer]);
-								const objectUrl = URL.createObjectURL(blob);
-
-								// 清理旧的objectURL
-								const oldObjectUrl = imageDiv.getAttribute('data-object-url');
-								if (oldObjectUrl) {
-									URL.revokeObjectURL(oldObjectUrl);
-								}
-
-								imageDiv.setAttribute('data-object-url', objectUrl);
-								img.src = objectUrl;
-
-								// 尝试缓存从Electron API获取的图片
-								try {
-									const contentType = response.headers['content-type'] || 'image/jpeg';
-									log.debug(() => `缓存从Electron API获取的图片: ${imagePath}, 类型: ${contentType}`);
-
-									await this.plugin.imageCacheService.cacheImage(
-										imagePath,
-										buffer.buffer,
-										undefined,
-										contentType
-									);
-
-									log.debug(() => `成功缓存从Electron API获取的图片: ${imagePath}`);
-								} catch (cacheError) {
-									log.error(() => `缓存从Electron API获取的图片失败: ${imagePath}`, cacheError);
-								}
-							} catch (error) {
-								log.error(() => '处理Electron响应失败:', error);
-								img.src = imagePath; // 失败时尝试直接设置
-							}
-						});
-					});
-
-					request.on('error', () => {
+							log.debug(() => `成功缓存微博图片: ${imagePath}`);
+						} catch (cacheError) {
+							log.error(() => `缓存微博图片失败: ${imagePath}`, cacheError);
+						}
+					} catch (error) {
+						log.error(() => '处理 requestUrl 响应失败:', error);
 						img.src = imagePath; // 失败时尝试直接设置
-					});
+					}
+				}).catch((error: Error | undefined) => {
+					log.error(() => `requestUrl 加载微博图片失败: ${imagePath}`, error);
+					img.src = imagePath; // 失败时尝试直接设置
+				});
 
-					request.end();
-					return; // 结束Electron尝试，等待结果
-				}
+				return; // 等待 requestUrl 结果
 			} catch (e) {
-				log.debug(() => `Electron环境不可用，直接设置src: ${e}`);
+				log.debug(() => `requestUrl 不可用，直接设置src: ${e}`);
 			}
 		}
 
@@ -1171,179 +1170,115 @@ export class CurrentNoteImageGalleryService extends Modal {
 		resolve: () => void,
 		reject: (error: any) => void
 	): Promise<void> {
-		const electron = require('electron');
-		if (!electron || !electron.remote || !electron.remote.net) {
-			log.error(() => 'Electron API 不可用');
-			img.src = imagePath;
-
-			const imageData = this.imageDataMap.get(imagePath);
-			if (imageData) {
-				imageData.isLoading = false;
-			}
-
-			reject(new Error('Electron API 不可用'));
-			return;
-		}
-
-		const {net} = require('electron').remote;
+		// 使用 Obsidian 的 requestUrl API 代替 electron.remote
+		const {requestUrl} = require('obsidian');
 		const MAX_RETRIES = 3;
 
-		// 创建新请求前检查并清理旧请求
-		const existingRequestId = imageDiv.getAttribute('data-request-id');
-		if (existingRequestId) {
-			const oldRequest = this.currentRequests.get(existingRequestId);
-			if (oldRequest) {
-				if (oldRequest.electronRequest) {
-					try {
-						oldRequest.electronRequest.abort(); // Abort Electron request
-					} catch (e) {
-						log.error(() => 'Failed to abort Electron request:', e);
-					}
-				} else if (oldRequest.controller) {
-					oldRequest.controller.abort(); // Abort fetch request
-				}
-				this.currentRequests.delete(existingRequestId);
-			}
-		}
+		try {
+			log.debug(() => `使用 requestUrl 加载微博图片 (无缓存): ${imagePath}`);
 
-		const request = net.request({
-			url: imagePath,
-			headers: {
-				'Referer': 'https://weibo.com/',
-				'Cache-Control': 'no-cache',
-			}
-		});
-
-		const requestId = Date.now().toString();
-		imageDiv.setAttribute('data-request-id', requestId);
-
-		this.currentRequests.set(requestId, {
-			electronRequest: request,
-			timestamp: Date.now()
-		});
-
-		const imageData: Buffer[] = [];
-
-		request.on('response', (response: any) => {
-			if (response.statusCode !== 200) {
-				reject(new Error(`HTTP Error: ${response.statusCode}`));
-				return;
-			}
-
-			response.on('data', (chunk: Buffer) => {
-				imageData.push(chunk);
-			});
-
-			response.on('end', async () => {
-				try {
-					const buffer = Buffer.concat(imageData);
-					const blob = new Blob([buffer]);
-
-					// 清理旧的 objectURL
-					const oldObjectUrl = imageDiv.getAttribute('data-object-url');
-					if (oldObjectUrl) {
-						URL.revokeObjectURL(oldObjectUrl);
-					}
-
-					// 尝试从响应头获取内容类型
-					const contentType = response.headers['content-type'];
-
-					// 传递内容类型到缓存服务
-					await this.plugin.imageCacheService.cacheImage(
-						imagePath,
-						buffer.buffer,
-						undefined,
-						contentType
-					);
-
-					const objectUrl = URL.createObjectURL(blob);
-					imageDiv.setAttribute('data-object-url', objectUrl);
-
-					img.onload = () => {
-						loadingText.remove();
-
-						// 移除占位符
-						const placeholder = imageDiv.querySelector('.image-placeholder');
-						if (placeholder) {
-							placeholder.remove();
-						}
-
-						const ratio = img.naturalHeight / img.naturalWidth;
-
-						const baseHeight = 10;
-						const heightSpan = Math.min(Math.ceil(ratio * baseHeight), 30);
-
-						imageDiv.style.gridRowEnd = `span ${heightSpan}`;
-						img.style.opacity = '1';
-						this.loadedImages++;
-						this.updateProgressBar();
-						this.currentRequests.delete(requestId);
-						resolve();
-					};
-
-					img.onerror = async () => {
-						URL.revokeObjectURL(objectUrl);
-						if (retryCount < MAX_RETRIES) {
-							log.debug(() => `Retrying image load (${retryCount + 1}/${MAX_RETRIES}): ${imagePath}`);
-							await this.loadWeiboImage(imagePath, img, imageDiv, loadingText, retryCount + 1);
-							resolve();
-						} else {
-							this.handleImageError(imageDiv, '加载失败');
-							this.loadedImages++;
-							reject(new Error('Max retries reached'));
-						}
-					};
-
-					img.src = objectUrl;
-				} catch (error) {
-					this.handleError(error, imageDiv, requestId, retryCount);
-					reject(error);
+			const response = await requestUrl({
+				url: imagePath,
+				method: 'GET',
+				headers: {
+					'Referer': 'https://weibo.com/',
+					'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 				}
 			});
-		});
 
-		request.on('error', (error: Error) => {
-			log.error(() => `微博图片请求错误: ${imagePath}`, error);
-			this.handleError(error, imageDiv, requestId, retryCount);
+			if (response.status !== 200) {
+				throw new Error(`HTTP Error: ${response.status}`);
+			}
 
-			// 确保更新图片数据状态
+			const arrayBuffer = response.arrayBuffer;
+			const contentType = response.headers['content-type'] || 'image/jpeg';
+			const blob = new Blob([arrayBuffer], {type: contentType});
+
+			// 使用 ResourceManager 管理 objectURL
+			const objectUrl = this.resourceManager.createObjectURL(imagePath, blob);
+
+			img.onload = () => {
+				if (loadingText && loadingText.parentNode) {
+					loadingText.remove();
+				}
+
+				// 移除占位符
+				const placeholder = imageDiv.querySelector('.image-placeholder');
+				if (placeholder) {
+					placeholder.remove();
+				}
+
+				const ratio = img.naturalHeight / img.naturalWidth;
+				const baseHeight = 10;
+				const heightSpan = Math.min(Math.ceil(ratio * baseHeight), 30);
+
+				imageDiv.style.gridRowEnd = `span ${heightSpan}`;
+				img.style.opacity = '1';
+				this.loadedImages++;
+				this.updateProgressBar();
+
+				const imageData = this.imageDataMap.get(imagePath);
+				if (imageData) {
+					imageData.isLoading = false;
+				}
+
+				resolve();
+			};
+
+			img.onerror = async () => {
+				if (retryCount < MAX_RETRIES) {
+					log.debug(() => `重试微博图片加载 (${retryCount + 1}/${MAX_RETRIES}): ${imagePath}`);
+					await this.loadWeiboImage(imagePath, img, imageDiv, loadingText, retryCount + 1);
+					resolve();
+				} else {
+					this.handleImageError(imageDiv, '加载失败');
+					this.loadedImages++;
+					this.updateProgressBar();
+					reject(new Error('达到最大重试次数'));
+				}
+			};
+
+			img.src = objectUrl;
+
 			const imageData = this.imageDataMap.get(imagePath);
 			if (imageData) {
-				imageData.isLoading = false;
+				imageData.objectUrl = objectUrl;
 			}
 
-			reject(error);
-		});
-
-		const timeoutId = setTimeout(() => {
-			log.warn(`微博图片请求超时: ${imagePath}`);
+			// 尝试缓存图片
 			try {
-				request.abort();
-			} catch (e) {
-				log.error(() => '中止超时请求时出错:', e);
+				await this.plugin.imageCacheService.cacheImage(
+					imagePath,
+					arrayBuffer,
+					undefined,
+					contentType
+				);
+				log.debug(() => `成功缓存微博图片: ${imagePath}`);
+			} catch (cacheError) {
+				log.error(() => `缓存微博图片失败: ${imagePath}`, cacheError);
 			}
-			this.currentRequests.delete(requestId);
+		} catch (error) {
+			log.error(() => `requestUrl 加载微博图片失败: ${imagePath}`, error);
 
-			// 确保更新图片数据状态
 			const imageData = this.imageDataMap.get(imagePath);
 			if (imageData) {
 				imageData.isLoading = false;
 			}
 
 			if (retryCount < MAX_RETRIES) {
-				log.debug(() => `超时后重试加载微博图片 (${retryCount + 1}/${MAX_RETRIES}): ${imagePath}`);
-				this.loadWeiboImage(imagePath, img, imageDiv, loadingText, retryCount + 1)
-					.then(resolve)
-					.catch(reject);
+				log.debug(() => `请求失败后重试 (${retryCount + 1}/${MAX_RETRIES}): ${imagePath}`);
+				setTimeout(() => {
+					this.loadWeiboImage(imagePath, img, imageDiv, loadingText, retryCount + 1)
+						.then(resolve)
+						.catch(reject);
+				}, 1000 * (retryCount + 1));
 			} else {
-				this.handleImageError(imageDiv, '请求超时');
+				this.handleImageError(imageDiv, '加载失败');
 				this.loadedImages++;
 				this.updateProgressBar();
-				reject(new Error('Request timeout'));
+				reject(error);
 			}
-		}, 5000);
-
-		request.end();
+		}
 	}
 
 	private handleError(error: Error, imageDiv: HTMLElement, requestId: string | undefined, retryCount: number) {
