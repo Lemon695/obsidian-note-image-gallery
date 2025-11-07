@@ -76,7 +76,7 @@ export class NoteImageGallerySettingTab extends PluginSettingTab {
 				log.debug(() => '缓存大小为0或无效');
 			}
 		} catch (e) {
-			log.error("获取缓存大小失败:", e);
+			log.error(() => '获取缓存大小失败:',e);
 			new Notice('无法获取缓存大小，请尝试重新初始化缓存');
 		}
 

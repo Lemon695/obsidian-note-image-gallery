@@ -80,7 +80,7 @@ export default class NoteImageGalleryPlugin extends Plugin {
 			this.currentNoteImageGalleryService = new CurrentNoteImageGalleryService(this.app, this, images);
 			this.currentNoteImageGalleryService.open();
 		} catch (error) {
-			log.error('Error opening image gallery modal:', error);
+			log.error(() => 'Error opening image gallery modal:',error);
 			new Notice('Error opening image gallery');
 		}
 	}
@@ -108,7 +108,7 @@ export default class NoteImageGalleryPlugin extends Plugin {
 				await this.imageCacheService.saveCacheIndex();
 				log.debug(() => '缓存索引已保存');
 			} catch (e) {
-				log.error('保存缓存索引失败:', e);
+				log.error(() => '保存缓存索引失败:',e);
 			}
 		}
 

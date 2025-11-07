@@ -1175,10 +1175,10 @@ export class CurrentNoteImageGalleryService extends Modal {
 							img.src = cachedImage.data;
 							return;
 						} else {
-							log.info(() => `缓存未命中，从网络加载: ${imagePath}`);
+							log.debug(() => `缓存未命中，从网络加载: ${imagePath}`);
 						}
 					} else {
-						log.info(() => `图片缓存已禁用`);
+						log.debug(() => `图片缓存已禁用`);
 					}
 				} catch (error) {
 					log.error(() => `获取缓存出错: ${imagePath}`, error);
