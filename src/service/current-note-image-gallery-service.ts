@@ -575,7 +575,11 @@ export class CurrentNoteImageGalleryService extends Modal {
 		this.intersectionObserver?.observe(imageDiv);
 
 		// 添加点击事件用于查看大图
-		imageDiv.addEventListener('click', () => {
+		imageDiv.addEventListener('click', (e) => {
+			// 阻止事件冒泡，避免与其他插件（如 Image Toolkit）冲突
+			e.stopPropagation();
+			e.preventDefault();
+
 			const currentIndex = this.images.indexOf(imagePath);
 			this.createLightboxWithNavigation(currentIndex);
 		});
@@ -1737,12 +1741,13 @@ export class CurrentNoteImageGalleryService extends Modal {
 			zoomImage(isZoomed ? 1 : 2);
 		};
 
-		const navigateImage = (newIndex: number) => {
+		const navigateImage = async (newIndex: number) => {
 			// 处理循环导航
 			currentIndex = (newIndex + this.images.length) % this.images.length;
 
 			// 显示加载提示
 			loadingText.style.display = 'block';
+			loadingText.setText('加载中...');
 
 			// 重置缩放状态
 			isZoomed = false;
@@ -1752,22 +1757,78 @@ export class CurrentNoteImageGalleryService extends Modal {
 			const imagePath = this.images[currentIndex];
 			const imageData = this.imageDataMap.get(imagePath);
 
+			// 先设置加载完成和错误的回调，再设置 src
+			img.onload = () => {
+				loadingText.style.display = 'none';
+			};
+
+			img.onerror = () => {
+				loadingText.style.display = 'none';
+				loadingText.setText('加载失败');
+				setTimeout(() => {
+					loadingText.setText('加载中...');
+				}, 2000);
+			};
+
+			// 设置图片源
 			if (imageData && imageData.objectUrl) {
+				// 已有 objectUrl，直接使用
 				img.src = imageData.objectUrl;
 			} else if (imagePath.startsWith('http://') || imagePath.startsWith('https://')) {
-				// 使用直接 URL
-				img.crossOrigin = 'anonymous';
-				img.src = imagePath;
+				// 网络图片，需要通过缓存服务加载
+				try {
+					// 先检查缓存
+					if (this.plugin.settings.enableCache) {
+						const cachedImage = await this.plugin.imageCacheService.getCachedImage(imagePath);
+						if (cachedImage) {
+							log.debug(() => `Lightbox: 从缓存加载网络图片 ${imagePath}`);
+							loadingText.setText('从缓存加载...');
+							img.src = cachedImage.data;
+						} else {
+							log.debug(() => `Lightbox: 缓存未命中，触发图片加载 ${imagePath}`);
+							// 缓存未命中，触发图片墙中的加载
+							this.queueImageLoad(imagePath, true);
+							// 等待一小段时间看是否能获取到 objectUrl
+							await this.waitForImageLoad(imagePath, 5000);
+							const updatedImageData = this.imageDataMap.get(imagePath);
+							if (updatedImageData?.objectUrl) {
+								img.src = updatedImageData.objectUrl;
+							} else {
+								// 如果还是没有，尝试直接加载（可能会遇到CORS）
+								img.crossOrigin = 'anonymous';
+								img.src = imagePath;
+							}
+						}
+					} else {
+						// 缓存禁用，触发加载并等待
+						this.queueImageLoad(imagePath, true);
+						await this.waitForImageLoad(imagePath, 5000);
+						const updatedImageData = this.imageDataMap.get(imagePath);
+						if (updatedImageData?.objectUrl) {
+							img.src = updatedImageData.objectUrl;
+						} else {
+							img.crossOrigin = 'anonymous';
+							img.src = imagePath;
+						}
+					}
+				} catch (error) {
+					log.error(() => `Lightbox: 加载网络图片失败 ${imagePath}`, error);
+					// 失败时尝试直接加载
+					img.crossOrigin = 'anonymous';
+					img.src = imagePath;
+				}
 			} else {
+				// 本地图片
 				const newPath = this.getLinkPath(this.images[currentIndex]);
 				if (newPath) {
 					img.src = this.getResourcePath(newPath);
 				}
 			}
 
-			img.onload = () => {
+			// 检查图片是否已经加载完成（处理缓存情况）
+			if (img.complete && img.naturalHeight !== 0) {
 				loadingText.style.display = 'none';
-			};
+			}
 
 			// 更新计数器
 			const counter = lightbox.querySelector('.lightbox-counter');
@@ -1863,6 +1924,34 @@ export class CurrentNoteImageGalleryService extends Modal {
 		// 添加清理函数
 		lightbox.addEventListener('remove', () => {
 			document.removeEventListener('keydown', handleKeyDown);
+		});
+	}
+
+	/**
+	 * 等待图片加载完成
+	 * @param imagePath 图片路径
+	 * @param timeout 超时时间（毫秒）
+	 * @private
+	 */
+	private async waitForImageLoad(imagePath: string, timeout: number = 5000): Promise<void> {
+		const startTime = Date.now();
+		const checkInterval = 100; // 每100ms检查一次
+
+		return new Promise((resolve) => {
+			const checkLoad = () => {
+				const imageData = this.imageDataMap.get(imagePath);
+
+				// 如果已加载或出错，或超时，则结束等待
+				if (imageData?.objectUrl || imageData?.hasError || (Date.now() - startTime >= timeout)) {
+					resolve();
+					return;
+				}
+
+				// 继续等待
+				setTimeout(checkLoad, checkInterval);
+			};
+
+			checkLoad();
 		});
 	}
 
