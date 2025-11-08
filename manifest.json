@@ -3,7 +3,7 @@
 	"name": "Note Image Gallery",
 	"version": "1.0.5",
 	"minAppVersion": "1.9.14",
-	"description": "Display all images from your note in a gallery view.",
+	"description": "Show all images from the active note in a gallery view.",
 	"author": "Lemon695",
 	"authorUrl": "https://github.com/Lemon695",
 	"isDesktopOnly": false
