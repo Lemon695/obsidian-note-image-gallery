@@ -32,13 +32,13 @@ export default class NoteImageGalleryPlugin extends Plugin {
 		this.addSettingTab(new NoteImageGallerySettingTab(this.app, this));
 
 		this.addCommand({
-			id: 'open-current-note-image-gallery',
-			name: 'Open current note image gallery',
+			id: 'open-gallery',
+			name: 'Open gallery',
 			checkCallback: (checking: boolean) => {
 				const activeFile = this.app.workspace.getActiveFile();
 				if (activeFile && activeFile.extension === 'md') {
 					if (!checking) {
-						this.openImageGalleryModal();
+						void this.openImageGalleryModal();
 					}
 					return true;
 				}
@@ -46,13 +46,13 @@ export default class NoteImageGalleryPlugin extends Plugin {
 			}
 		});
 
-		this.addRibbonIcon('image-plus', 'Open current note image gallery', () => {
+		this.addRibbonIcon('image-plus', 'Open gallery', () => {
 			void this.openImageGalleryModal();
 		});
 
 		this.addCommand({
 			id: 'clear-cache',
-			name: 'Clear image cache',
+			name: 'Clear cache',
 			callback: () => {
 				void this.imageCacheService.clearAllCache();
 				new Notice('Image cache cleared');
@@ -101,15 +101,14 @@ export default class NoteImageGalleryPlugin extends Plugin {
 		return await this.app.vault.read(file);
 	}
 
-	async onunload() {
+	onunload() {
 		// 确保缓存索引保存到磁盘
 		if (this.imageCacheService) {
-			try {
-				await this.imageCacheService.saveCacheIndex();
+			void this.imageCacheService.saveCacheIndex().then(() => {
 				log.debug(() => '缓存索引已保存');
-			} catch (e) {
+			}).catch((e) => {
 				log.error(() => '保存缓存索引失败:',e);
-			}
+			});
 		}
 
 		if (this.currentNoteImageGalleryService) {

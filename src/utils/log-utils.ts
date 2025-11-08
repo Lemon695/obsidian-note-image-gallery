@@ -54,7 +54,7 @@ export class Logger {
 	 */
 	public setDebugMode(enabled: boolean): void {
 		if (this.debugMode !== enabled) {
-			console.log(`[${this.pluginName}] 调试模式${enabled ? '开启' : '关闭'}`);
+			console.debug(`[${this.pluginName}] 调试模式${enabled ? '开启' : '关闭'}`);
 			this.debugMode = enabled;
 		}
 	}
@@ -75,7 +75,7 @@ export class Logger {
 		// 当调试模式开启或日志级别设置为DEBUG时显示调试日志
 		if ((this.debugMode || this.logLevel <= LogLevel.DEBUG) && this.isCategoryEnabled(category)) {
 			const finalMessage = typeof message === 'function' ? message() : message;
-			console.log(`[${this.pluginName}] [DEBUG] [${category}] ${finalMessage}`);
+			console.debug(`[${this.pluginName}] [DEBUG] [${category}] ${finalMessage}`);
 		}
 	}
 
@@ -86,7 +86,7 @@ export class Logger {
 	public info(message: string | (() => string)): void {
 		if (this.logLevel <= LogLevel.INFO) {
 			const finalMessage = typeof message === 'function' ? message() : message;
-			console.log(`[${this.pluginName}] [INFO] ${finalMessage}`);
+			console.debug(`[${this.pluginName}] [INFO] ${finalMessage}`);
 		}
 	}
 

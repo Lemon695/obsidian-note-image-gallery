@@ -616,7 +616,7 @@ export class ImageCacheService {
 	 */
 	setMaxCacheAge(maxAge: number): void {
 		this.maxCacheAge = maxAge;
-		this.cleanCache(); // 立即清理可能的过期缓存
+		void this.cleanCache(); // 立即清理可能的过期缓存
 	}
 
 	/**
@@ -624,7 +624,7 @@ export class ImageCacheService {
 	 */
 	setMaxCacheSize(maxSize: number): void {
 		this.maxCacheSize = maxSize;
-		this.cleanCache(); // 立即清理可能超出大小的缓存
+		void this.cleanCache(); // 立即清理可能超出大小的缓存
 	}
 
 	/**

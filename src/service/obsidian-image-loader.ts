@@ -63,7 +63,7 @@ export class ObsidianImageLoader {
 	 * @param originalPath 原始路径
 	 * @returns 可能的替代路径数组
 	 */
-	async getAlternativeLocalPaths(originalPath: string): Promise<string[]> {
+	getAlternativeLocalPaths(originalPath: string): string[] {
 		const result: string[] = [];
 
 		try {
