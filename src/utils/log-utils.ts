@@ -1,4 +1,3 @@
-import {Notice} from "obsidian";
 
 export enum LogLevel {
 	DEBUG = 0,
@@ -31,7 +30,7 @@ export class Logger {
 	 * @param logLevel 初始日志级别，默认为INFO
 	 * @param debugMode 是否启用调试模式，默认为false
 	 */
-	constructor(pluginName: string, logLevel: LogLevel = LogLevel.INFO, debugMode: boolean = false) {
+	constructor(pluginName: string, logLevel: LogLevel = LogLevel.INFO, debugMode = false) {
 		this.pluginName = pluginName;
 		this.logLevel = logLevel;
 		this.debugMode = debugMode;
@@ -148,7 +147,7 @@ export const log = new Logger('Note Image Gallery');
 export const createLogger = (
 	pluginName: string,
 	logLevel: LogLevel = LogLevel.INFO,
-	debugMode: boolean = false
+	debugMode = false
 ): Logger => {
 	return new Logger(pluginName, logLevel, debugMode);
 };

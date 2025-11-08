@@ -1,4 +1,4 @@
-import {App, Modal, Notice, TFile} from 'obsidian';
+import {App, Modal, Notice, TFile, requestUrl} from 'obsidian';
 import NoteImageGalleryPlugin from "../main";
 import {log} from "../utils/log-utils";
 import {RetryHandler} from "../utils/retry-handler";
@@ -37,8 +37,8 @@ interface QueueItem {
 
 export class CurrentNoteImageGalleryService extends Modal {
 	private images: string[] = [];
-	private loadedImages: number = 0;
-	private totalImages: number = 0;
+	private loadedImages = 0;
+	private totalImages = 0;
 	private currentRequests: Map<string, ImageRequest> = new Map();
 	private imageDataMap: Map<string, ImageData> = new Map();
 	private queueImageLoad: (imagePath: string, isVisible?: boolean) => void = () => {
@@ -51,7 +51,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 	};
 	private resourceManager: ResourceManager;
 	private retryHandler = new RetryHandler(3);
-	private currentSortType: string = 'default';  // 保存当前的排序类型
+	private currentSortType = 'default';  // 保存当前的排序类型
 	private sortDebounceTimer: number | null = null;  // 排序防抖定时器
 
 	constructor(app: App, plugin: NoteImageGalleryPlugin, images: string[]) {
@@ -76,7 +76,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 		titleEl.setText(`图片墙 (${this.totalImages} 张图片)`);
 
 		const progressContainer = toolbar.createDiv('progress-container');
-		const progressEl = progressContainer.createEl('progress', {
+		progressContainer.createEl('progress', {
 			attr: {
 				max: this.totalImages.toString(),
 				value: '0'
@@ -154,7 +154,6 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 	private setupBatchLoading() {
 		const MAX_CONCURRENT_LOADS = 5;
-		const MAX_RETRIES = 3;
 		const loadQueue: QueueItem[] = [];
 		let activeLoads = 0;
 		let isProcessingQueue = false;
@@ -183,7 +182,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 					const item = loadQueue.shift();
 					if (!item) continue;
 
-					const {path, retries} = item;
+					const {path} = item;
 					const imageData = this.imageDataMap.get(path);
 
 					if (!imageData || imageData.isLoading || imageData.hasError) continue;
@@ -246,7 +245,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 				}
 			}
 		};
-		this.queueImageLoad = (imagePath: string, isVisible: boolean = false) => {
+		this.queueImageLoad = (imagePath: string, isVisible = false) => {
 			const imageData = this.imageDataMap.get(imagePath);
 			if (!imageData) return;
 
@@ -680,7 +679,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 		loadingText: HTMLElement,
 		resolve: () => void,
 		reject: (error: unknown) => void,
-		isWeiboImage: boolean = false
+		isWeiboImage = false
 	): Promise<void> {
 		let isNetworkImage = false;
 		try {
@@ -733,7 +732,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 		loadingText: HTMLElement,
 		resolve: () => void,
 		reject: (error: unknown) => void,
-		isWeiboImage: boolean = false
+		isWeiboImage = false
 	): Promise<void> {
 		try {
 			const controller = new AbortController();
@@ -822,7 +821,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 		loadingText: HTMLElement,
 		resolve: () => void,
 		reject: (error: unknown) => void,
-		isWeiboImage: boolean = false
+		isWeiboImage = false
 	): void {
 		log.debug(() => `直接加载图片: ${imagePath}`);
 
@@ -925,9 +924,6 @@ export class CurrentNoteImageGalleryService extends Modal {
 		// 如果是微博图片，尝试使用 Obsidian 的 requestUrl API
 		if (isWeiboImage) {
 			try {
-				// 使用 Obsidian 的 requestUrl API 代替 electron.remote
-				const {requestUrl} = require('obsidian');
-
 				log.debug(() => `使用 Obsidian requestUrl 加载微博图片: ${imagePath}`);
 
 				requestUrl({
@@ -1015,7 +1011,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 		return path.includes('/_resources/') ||
 			path.includes('/_attachments/') ||
 			path.includes('/_assets/') ||
-			path.match(/\/[^\/]+\/[^\/]+\.(png|jpg|jpeg|gif|svg|webp)$/i) !== null;
+			path.match(/\/[^/]+\/[^/]+\.(png|jpg|jpeg|gif|svg|webp)$/i) !== null;
 	}
 
 	// 尝试替代本地路径格式
@@ -1108,7 +1104,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 				// 触发父元素重新计算布局
 				if (imageDiv.parentElement) {
-					imageDiv.parentElement.style.display = imageDiv.parentElement.style.display;
+					void imageDiv.parentElement.offsetHeight; // Force reflow
 				}
 			}
 		}, 50);
@@ -1139,62 +1135,63 @@ export class CurrentNoteImageGalleryService extends Modal {
 		img: HTMLImageElement,
 		imageDiv: HTMLElement,
 		loadingText: HTMLElement,
-		isWeiboImage: boolean = false
+		isWeiboImage = false
 	): Promise<void> {
-		return new Promise(async (resolve, reject) => {
-			const imageData = this.imageDataMap.get(imagePath);
-			if (!imageData) {
-				reject(new Error('Image data not found'));
-				return;
-			}
+		const imageData = this.imageDataMap.get(imagePath);
+		if (!imageData) {
+			throw new Error('Image data not found');
+		}
 
-			const isNetworkImage = imagePath.startsWith('http://') || imagePath.startsWith('https://');
+		const isNetworkImage = imagePath.startsWith('http://') || imagePath.startsWith('https://');
 
-			// 对于网络图片，先检查缓存
-			if (isNetworkImage) {
-				try {
-					if (this.plugin.settings.enableCache) {
-						log.debug(() => `检查图片缓存: ${imagePath}`);
+		// 对于网络图片，先检查缓存
+		if (isNetworkImage) {
+			try {
+				if (this.plugin.settings.enableCache) {
+					log.debug(() => `检查图片缓存: ${imagePath}`);
 
-						// 异步获取缓存
-						const cachedImage = await this.plugin.imageCacheService.getCachedImage(imagePath);
+					// 异步获取缓存
+					const cachedImage = await this.plugin.imageCacheService.getCachedImage(imagePath);
 
-						if (cachedImage) {
-							log.info(() => `✓ 缓存命中，从缓存加载: ${imagePath}`);
-							loadingText.setText('从缓存加载...');
+					if (cachedImage) {
+						log.info(() => `✓ 缓存命中，从缓存加载: ${imagePath}`);
+						loadingText.setText('从缓存加载...');
 
+						await new Promise<void>((resolve, reject) => {
 							img.onload = () => {
 								log.info(() => `✓ 缓存图片加载成功: ${imagePath}`);
 								this.handleImageLoadSuccess(img, imageDiv, loadingText, imagePath);
 								resolve();
 							};
 
-							img.onerror = async (e) => {
+							img.onerror = (e) => {
 								log.error(() => `✗ 缓存图片加载失败: ${imagePath}, 错误: ${e}`);
-								// 缓存加载失败，尝试网络加载
-								await this.tryNetworkImageLoading(imagePath, img, imageDiv, loadingText, resolve, reject, isWeiboImage);
+								reject(e);
 							};
 
 							// 设置图片源为缓存的base64数据
 							img.src = cachedImage.data;
-							return;
-						} else {
-							log.debug(() => `缓存未命中，从网络加载: ${imagePath}`);
-						}
+						}).catch(async () => {
+							// 缓存加载失败，尝试网络加载
+							await this.tryNetworkImageLoading(imagePath, img, imageDiv, loadingText, () => {}, () => {}, isWeiboImage);
+						});
+						return;
 					} else {
-						log.debug(() => `图片缓存已禁用`);
+						log.debug(() => `缓存未命中，从网络加载: ${imagePath}`);
 					}
-				} catch (error) {
-					log.error(() => `获取缓存出错: ${imagePath}`, error);
+				} else {
+					log.debug(() => `图片缓存已禁用`);
 				}
-
-				// 缓存未命中或禁用，尝试网络加载
-				await this.tryNetworkImageLoading(imagePath, img, imageDiv, loadingText, resolve, reject, isWeiboImage);
-			} else {
-				// 本地图片，使用原有逻辑
-				await this.tryAdvancedImageLoading(imagePath, img, imageDiv, loadingText, resolve, reject, isWeiboImage);
+			} catch (error) {
+				log.error(() => `获取缓存出错: ${imagePath}`, error);
 			}
-		});
+
+			// 缓存未命中或禁用，尝试网络加载
+			await this.tryNetworkImageLoading(imagePath, img, imageDiv, loadingText, () => {}, () => {}, isWeiboImage);
+		} else {
+			// 本地图片，使用原有逻辑
+			await this.tryAdvancedImageLoading(imagePath, img, imageDiv, loadingText, () => {}, () => {}, isWeiboImage);
+		}
 	}
 
 	private async tryNetworkImageLoading(
@@ -1307,39 +1304,40 @@ export class CurrentNoteImageGalleryService extends Modal {
 		img: HTMLImageElement,
 		imageDiv: HTMLElement,
 		loadingText: HTMLElement,
-		retryCount: number = 0
+		retryCount = 0
 	): Promise<void> {
+		try {
+			// 异步获取缓存
+			const cachedImage = await this.plugin.imageCacheService.getCachedImage(imagePath);
 
-		return new Promise<void>(async (resolve, reject) => {
-			try {
-				// 异步获取缓存
-				const cachedImage = await this.plugin.imageCacheService.getCachedImage(imagePath);
+			if (cachedImage) {
+				log.debug(() => `Loading Weibo image from cache: ${imagePath}`);
 
-				if (cachedImage) {
-					log.debug(() => `Loading Weibo image from cache: ${imagePath}`);
-
+				await new Promise<void>((resolve, reject) => {
 					img.onload = () => {
 						this.handleImageLoadSuccess(img, imageDiv, loadingText, imagePath);
 						resolve();
 					};
 
-					img.onerror = async (e) => {
+					img.onerror = (e) => {
 						log.error(() => `Cached Weibo image load error: ${e}`);
-						await this.loadWeiboImageWithoutCache(imagePath, img, imageDiv, loadingText, retryCount, resolve, reject);
+						reject(e);
 					};
 
 					// 设置图片源为缓存的base64数据
 					img.src = cachedImage.data;
-					return;
-				}
-
-				await this.loadWeiboImageWithoutCache(imagePath, img, imageDiv, loadingText, retryCount, resolve, reject);
-			} catch (error) {
-				const currentRequestId = imageDiv.getAttribute('data-request-id');
-				this.handleError(error, imageDiv, currentRequestId || undefined, retryCount);
-				reject(error);
+				}).catch(async (e) => {
+					await this.loadWeiboImageWithoutCache(imagePath, img, imageDiv, loadingText, retryCount, () => {}, () => {});
+				});
+				return;
 			}
-		});
+
+			await this.loadWeiboImageWithoutCache(imagePath, img, imageDiv, loadingText, retryCount, () => {}, () => {});
+		} catch (error) {
+			const currentRequestId = imageDiv.getAttribute('data-request-id');
+			this.handleError(error, imageDiv, currentRequestId || undefined, retryCount);
+			throw error;
+		}
 	}
 
 	private async loadWeiboImageWithoutCache(
@@ -1352,7 +1350,6 @@ export class CurrentNoteImageGalleryService extends Modal {
 		reject: (error: unknown) => void
 	): Promise<void> {
 		// 使用 Obsidian 的 requestUrl API 代替 electron.remote
-		const {requestUrl} = require('obsidian');
 		const MAX_RETRIES = 3;
 
 		try {
@@ -1497,13 +1494,13 @@ export class CurrentNoteImageGalleryService extends Modal {
 			}
 
 			if (this.loadedImages >= this.totalImages) {
+				setTimeout(() => {
+					const container = this.contentEl.querySelector('.progress-container');
+					if (container) {
+						container.addClass('complete');
+					}
+				}, 800);
 			}
-			setTimeout(() => {
-				const container = this.contentEl.querySelector('.progress-container');
-				if (container) {
-					container.addClass('complete');
-				}
-			}, 800);
 		}
 	}
 
@@ -1595,13 +1592,25 @@ export class CurrentNoteImageGalleryService extends Modal {
 			ctx.drawImage(img, 0, 0);
 
 			try {
-				const blob = await new Promise<Blob>((resolve) => {
-					canvas.toBlob((b) => resolve(b!), 'image/png');
+				const blob = await new Promise<Blob>((resolve, reject) => {
+					canvas.toBlob((b) => {
+						if (b) {
+							resolve(b);
+						} else {
+							reject(new Error('Failed to create blob'));
+						}
+					}, 'image/png');
 				});
 				await this.writeToClipboard(blob);
 			} catch (e) {
-				const blob = await new Promise<Blob>((resolve) => {
-					canvas.toBlob((b) => resolve(b!), 'image/jpeg', 0.95);
+				const blob = await new Promise<Blob>((resolve, reject) => {
+					canvas.toBlob((b) => {
+						if (b) {
+							resolve(b);
+						} else {
+							reject(new Error('Failed to create blob'));
+						}
+					}, 'image/jpeg', 0.95);
 				});
 				await this.writeToClipboard(blob);
 			}
@@ -1933,7 +1942,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 	 * @param timeout 超时时间（毫秒）
 	 * @private
 	 */
-	private async waitForImageLoad(imagePath: string, timeout: number = 5000): Promise<void> {
+	private async waitForImageLoad(imagePath: string, timeout = 5000): Promise<void> {
 		const startTime = Date.now();
 		const checkInterval = 100; // 每100ms检查一次
 

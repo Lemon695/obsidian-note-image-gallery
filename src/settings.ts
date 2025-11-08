@@ -1,6 +1,6 @@
 import {App, Notice, PluginSettingTab, Setting} from 'obsidian';
 import NoteImageGalleryPlugin from './main';
-import {log, LogLevel} from './utils/log-utils';
+import {log} from './utils/log-utils';
 
 export interface Settings {
 	enableCache: boolean;
@@ -34,7 +34,9 @@ export class NoteImageGallerySettingTab extends PluginSettingTab {
 
 		containerEl.empty();
 
-		containerEl.createEl('h2', {text: '图片墙设置'});
+		new Setting(containerEl)
+			.setName('图片墙设置')
+			.setHeading();
 
 		new Setting(containerEl)
 			.setName('启用图片缓存')
@@ -80,7 +82,10 @@ export class NoteImageGallerySettingTab extends PluginSettingTab {
 			new Notice('无法获取缓存大小，请尝试重新初始化缓存');
 		}
 
-		containerEl.createEl('h3', {text: '缓存状态'});
+		new Setting(containerEl)
+			.setName('缓存状态')
+			.setHeading();
+
 		const cacheStatusEl = containerEl.createEl('p', {
 			text: `当前缓存大小: ${cacheSizeInMB} MB / ${this.plugin.settings.maxCacheSize} MB`
 		});
@@ -110,13 +115,15 @@ export class NoteImageGallerySettingTab extends PluginSettingTab {
 			.setDesc('重新计算缓存大小')
 			.addButton(button => button
 				.setButtonText('刷新')
-				.onClick(async () => {
-					// 重新初始化缓存以获取最新状态
-					await this.plugin.imageCacheService.initCache();
+				.onClick(() => {
+					void (async () => {
+						// 重新初始化缓存以获取最新状态
+						await this.plugin.imageCacheService.initCache();
 
-					// 更新显示的缓存大小
-					const newCacheSizeInMB = (this.plugin.imageCacheService.getCacheSize() / (1024 * 1024)).toFixed(2);
-					cacheStatusEl.setText(`当前缓存大小: ${newCacheSizeInMB} MB / ${this.plugin.settings.maxCacheSize} MB`);
+						// 更新显示的缓存大小
+						const newCacheSizeInMB = (this.plugin.imageCacheService.getCacheSize() / (1024 * 1024)).toFixed(2);
+						cacheStatusEl.setText(`当前缓存大小: ${newCacheSizeInMB} MB / ${this.plugin.settings.maxCacheSize} MB`);
+					})();
 				}));
 
 		// 添加清除缓存按钮
@@ -125,10 +132,12 @@ export class NoteImageGallerySettingTab extends PluginSettingTab {
 			.setDesc('删除所有缓存的图片')
 			.addButton(button => button
 				.setButtonText('清除全部缓存')
-				.onClick(async () => {
-					await this.plugin.imageCacheService.clearAllCache();
-					// 刷新界面,显示更新后的缓存大小
-					this.display();
+				.onClick(() => {
+					void (async () => {
+						await this.plugin.imageCacheService.clearAllCache();
+						// 刷新界面,显示更新后的缓存大小
+						this.display();
+					})();
 				}));
 
 		new Setting(containerEl)

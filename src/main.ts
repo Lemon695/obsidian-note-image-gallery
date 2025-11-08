@@ -1,9 +1,9 @@
-import {Plugin, TFile, MarkdownView, Notice} from 'obsidian';
+import {Plugin, TFile, Notice} from 'obsidian';
 import {DEFAULT_SETTINGS, Settings, NoteImageGallerySettingTab} from './settings';
 import {CurrentNoteImageGalleryService} from "./service/current-note-image-gallery-service";
 import {ImageCacheService} from './service/image-cache-service';
 import {ImageExtractorService} from "./service/image-extractor-service";
-import {Logger, LogLevel, createLogger, log} from './utils/log-utils';
+import {log} from './utils/log-utils';
 import {ObsidianImageLoader} from "./service/obsidian-image-loader";
 
 export default class NoteImageGalleryPlugin extends Plugin {
@@ -33,7 +33,7 @@ export default class NoteImageGalleryPlugin extends Plugin {
 
 		this.addCommand({
 			id: 'open-current-note-image-gallery',
-			name: 'Open Current Note Image Gallery',
+			name: 'Open current note image gallery',
 			checkCallback: (checking: boolean) => {
 				const activeFile = this.app.workspace.getActiveFile();
 				if (activeFile && activeFile.extension === 'md') {
@@ -46,16 +46,16 @@ export default class NoteImageGalleryPlugin extends Plugin {
 			}
 		});
 
-		this.addRibbonIcon('image-plus', 'Open Current Note Image Gallery', async () => {
-			await this.openImageGalleryModal();
+		this.addRibbonIcon('image-plus', 'Open current note image gallery', () => {
+			void this.openImageGalleryModal();
 		});
 
 		this.addCommand({
-			id: 'clear-note-image-gallery-cache',
-			name: 'Clear Note Image Gallery Cache',
+			id: 'clear-cache',
+			name: 'Clear image cache',
 			callback: () => {
-				this.imageCacheService.clearAllCache();
-				new Notice('Image gallery cache cleared');
+				void this.imageCacheService.clearAllCache();
+				new Notice('Image cache cleared');
 			}
 		});
 	}

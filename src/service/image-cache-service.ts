@@ -1,4 +1,4 @@
-import {App, TFile, Vault} from 'obsidian';
+import {App} from 'obsidian';
 import {log} from "../utils/log-utils";
 
 interface CachedImage {
@@ -20,20 +20,26 @@ interface CacheIndex {
 }
 
 export class ImageCacheService {
-	private cacheDir = '.obsidian/plugins/note-image-gallery/cache';
-	private indexFile = '.obsidian/plugins/note-image-gallery/cache/index.json';
+	private app: App;
 	private maxCacheAge = 7 * 24 * 60 * 60 * 1000;  // 7天缓存过期时间
 	private maxCacheSize = 100 * 1024 * 1024;  // 100MB最大缓存大小
 	private cacheIndex: CacheIndex = {};
-	private app: App;
 	private shouldUseCacheCallback: (() => boolean) | null = null;
-	private _isSaving: boolean = false;
-	private totalCacheSize: number = 0;
+	private _isSaving = false;
+	private totalCacheSize = 0;
 	private debounceSaveTimeout: NodeJS.Timeout | null = null;
+
+	private get cacheDir(): string {
+		return `${this.app.vault.configDir}/plugins/note-image-gallery/cache`;
+	}
+
+	private get indexFile(): string {
+		return `${this.app.vault.configDir}/plugins/note-image-gallery/cache/index.json`;
+	}
 
 	constructor(app: App) {
 		this.app = app;
-		this.loadCacheIndex();
+		void this.loadCacheIndex();
 	}
 
 	/**
@@ -44,7 +50,7 @@ export class ImageCacheService {
 			const adapter = this.app.vault.adapter;
 
 			// 检查并创建插件目录
-			const pluginDir = '.obsidian/plugins/note-image-gallery';
+			const pluginDir = `${this.app.vault.configDir}/plugins/note-image-gallery`;
 			if (!(await adapter.exists(pluginDir))) {
 				log.debug(() => `创建插件目录: ${pluginDir}`);
 				await adapter.mkdir(pluginDir);
@@ -340,7 +346,7 @@ export class ImageCacheService {
 	}
 
 	// 添加防抖保存索引方法
-	private debouncedSaveCacheIndex(delay: number = 2000): void {
+	private debouncedSaveCacheIndex(delay = 2000): void {
 		if (this.debounceSaveTimeout) {
 			clearTimeout(this.debounceSaveTimeout);
 		}
