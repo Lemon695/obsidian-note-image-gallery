@@ -4,6 +4,16 @@ import {log} from "../utils/log-utils";
 import {RetryHandler} from "../utils/retry-handler";
 import {ResourceManager} from "../utils/resource-manager";
 
+// Helper function to set CSS properties
+function setCssProps(element: HTMLElement | Element, styles: Record<string, string>): void {
+	const htmlElement = element as HTMLElement;
+	for (const [key, value] of Object.entries(styles)) {
+		// Convert camelCase to kebab-case for CSS property names
+		const cssKey = key.replace(/([A-Z])/g, '-$1').toLowerCase();
+		htmlElement.style.setProperty(cssKey, value);
+	}
+}
+
 // 定义Electron请求接口（用于向后兼容）
 interface ElectronRequest {
 	abort(): void;
@@ -170,7 +180,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 			});
 		};
 
-		const processQueue = async () => {
+		const processQueue = () => {
 			if (isProcessingQueue || loadQueue.length === 0 || activeLoads >= MAX_CONCURRENT_LOADS) return;
 
 			isProcessingQueue = true;
@@ -197,16 +207,16 @@ export class CurrentNoteImageGalleryService extends Modal {
 					log.debug(() => `队列处理图片: ${path}, 是否网络图片: ${isNetworkImage}, 是否微博图片: ${isWeiboImage}, 当前活跃加载: ${activeLoads}`);
 
 					// 异步执行加载操作，确保 activeLoads 计数器正确管理
-					(async () => {
+					void (async () => {
 						try {
 							await this.retryHandler.execute(
 								async () => {
-									const imgEl = imageData.element.querySelector('img') || imageData.element.createEl('img');
-									const loadingTextEl = imageData.element.querySelector('.loading-text') ||
-										imageData.element.createDiv('loading-text');
+									const imgEl = imageData.element.querySelector('img') as HTMLImageElement || imageData.element.createEl('img');
+									const loadingTextEl = (imageData.element.querySelector('.loading-text') ||
+										imageData.element.createDiv('loading-text')) as HTMLElement;
 									loadingTextEl.setText('加载中...');
 
-									await this.loadImageUnified(path, imgEl as HTMLImageElement, imageData.element, loadingTextEl as HTMLElement, isWeiboImage);
+									await this.loadImageUnified(path, imgEl, imageData.element, loadingTextEl, isWeiboImage);
 								},
 								`加载图片 ${path}`
 							);
@@ -333,12 +343,12 @@ export class CurrentNoteImageGalleryService extends Modal {
 					((currentFilter === '网络图片' || currentFilter === 'remote') && isRemote);
 
 				if (!matchesFilter) {
-					data.element.style.display = 'none';
+					setCssProps(data.element, { display: 'none' });
 					return;
 				}
 
 				// 符合筛选条件的图片一定要显示（设置display为空）
-				data.element.style.display = '';
+				setCssProps(data.element, { display: '' });
 
 				// 检查是否在可视区域内
 				const isVisible = data.position.bottom >= viewportTop &&
@@ -349,13 +359,14 @@ export class CurrentNoteImageGalleryService extends Modal {
 					if (!data.isLoading && !data.objectUrl && !data.hasError) {
 						this.queueImageLoad(data.path, true);
 					}
-					data.element.style.visibility = ''; // 显示元素
+					setCssProps(data.element, { visibility: '' }); // 显示元素
 
 					const images = Array.from(data.element.querySelectorAll('img'));
 					images.forEach(imgEl => {
-						if (imgEl.complete && imgEl.naturalWidth > 0 && imgEl.style.opacity !== '1') {
+						const currentOpacity = window.getComputedStyle(imgEl).opacity;
+						if (imgEl.complete && imgEl.naturalWidth > 0 && currentOpacity !== '1') {
 							log.debug(() => `修复未显示的图片: ${data.path}`);
-							imgEl.style.opacity = '1';
+							setCssProps(imgEl, { opacity: '1' });
 							imgEl.setAttribute('complete', 'true');
 							imgEl.classList.add('loaded');
 						}
@@ -363,7 +374,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 				} else {
 					// 不在可视区域内但符合筛选条件
 					// 设置为隐藏但保留在DOM中
-					data.element.style.visibility = 'hidden';
+					setCssProps(data.element, { visibility: 'hidden' });
 
 					// 对不可见的图片，也添加到加载队列，但优先级较低
 					if (!data.isLoading && !data.objectUrl && !data.hasError) {
@@ -380,17 +391,17 @@ export class CurrentNoteImageGalleryService extends Modal {
 					const isNowVisible = data.position.bottom >= viewportTop &&
 						data.position.top <= viewportBottom;
 
-					if (isNowVisible && data.element.style.display !== 'none') {
+					if (isNowVisible && window.getComputedStyle(data.element).display !== 'none') {
 						// 确保元素可见
-						data.element.style.visibility = '';
+						setCssProps(data.element, { visibility: '' });
 
 						// 确保图片加载并显示
 						const images = Array.from(data.element.querySelectorAll('img'));
 						images.forEach(imgEl => {
 							if (imgEl.complete && imgEl.naturalWidth > 0 &&
-								(imgEl.style.opacity !== '1' || !imgEl.classList.contains('loaded'))) {
+								(window.getComputedStyle(imgEl).opacity !== '1' || !imgEl.classList.contains('loaded'))) {
 								log.debug(() => `在动画帧中修复未显示的图片: ${data.path}`);
-								imgEl.style.opacity = '1';
+								setCssProps(imgEl, { opacity: '1' });
 								imgEl.classList.add('loaded');
 							}
 						});
@@ -404,7 +415,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 			boundUpdateElementPositions();
 			scrollHandler();
 		});
-		resizeObserver.observe(container as Element);
+		resizeObserver.observe(container);
 
 		// 监听图片加载完成，动态更新布局
 		const imageLoadHandler = () => {
@@ -447,13 +458,13 @@ export class CurrentNoteImageGalleryService extends Modal {
 		if (sortType === 'size-desc' || sortType === 'size-asc') {
 			// 过滤出已加载的图片（只要naturalWidth > 0就认为已加载，不依赖complete属性）
 			const loadedItems = items.filter(item => {
-				const img = item.querySelector('img');
-				const imagePath = (item as HTMLElement).getAttribute('data-path');
+				const img = item.querySelector('img') as HTMLImageElement | null;
+				const imagePath = item.getAttribute('data-path');
 				// 关键修改：只检查naturalWidth，不检查complete
-				const isLoaded = img && (img as HTMLImageElement).naturalWidth > 0;
+				const isLoaded = img && img.naturalWidth > 0;
 
 				if (img) {
-					log.debug(() => `检查图片 [${imagePath}]: complete=${(img as HTMLImageElement).complete}, naturalWidth=${(img as HTMLImageElement).naturalWidth}, naturalHeight=${(img as HTMLImageElement).naturalHeight}, isLoaded=${isLoaded}`);
+					log.debug(() => `检查图片 [${imagePath}]: complete=${img.complete}, naturalWidth=${img.naturalWidth}, naturalHeight=${img.naturalHeight}, isLoaded=${isLoaded}`);
 				}
 
 				return isLoaded;
@@ -461,8 +472,8 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 			// 未加载的图片
 			const unloadedItems = items.filter(item => {
-				const img = item.querySelector('img');
-				return !img || (img as HTMLImageElement).naturalWidth === 0;
+				const img = item.querySelector('img') as HTMLImageElement | null;
+				return !img || img.naturalWidth === 0;
 			});
 
 			log.debug(() => `已加载图片: ${loadedItems.length}, 未加载图片: ${unloadedItems.length}`);
@@ -482,10 +493,10 @@ export class CurrentNoteImageGalleryService extends Modal {
 			log.debug(() => `排序完成，已重新排列 ${loadedItems.length} 张已加载图片`);
 		} else {
 			// 默认排序：恢复原始顺序（按照imageDataMap的顺序）
-			const originalOrder: HTMLElement[] = [];
+			const originalOrder: Element[] = [];
 			this.imageDataMap.forEach((data) => {
-				if (items.includes(data.element as HTMLElement)) {
-					originalOrder.push(data.element as HTMLElement);
+				if (items.includes(data.element)) {
+					originalOrder.push(data.element);
 				}
 			});
 			originalOrder.forEach(item => container.appendChild(item));
@@ -500,11 +511,11 @@ export class CurrentNoteImageGalleryService extends Modal {
 	}
 
 	private getImageSize(element: Element): number {
-		const img = element.querySelector('img');
+		const img = element.querySelector('img') as HTMLImageElement | null;
 		if (!img) return 0;
 
-		const width = (img as HTMLImageElement).naturalWidth || 0;
-		const height = (img as HTMLImageElement).naturalHeight || 0;
+		const width = img.naturalWidth || 0;
+		const height = img.naturalHeight || 0;
 		const size = width * height;
 
 		// 只在图片实际加载时记录尺寸
@@ -522,16 +533,13 @@ export class CurrentNoteImageGalleryService extends Modal {
 			const isRemote = imagePath.startsWith('http://') || imagePath.startsWith('https://');
 
 			if (filterType === 'all' || filterType === '全部') {
-				data.element.style.display = '';
-				data.element.style.visibility = '';
+				setCssProps(data.element, { display: '', visibility: '' });
 			} else if ((filterType === '本地图片' || filterType === 'local') && !isRemote) {
-				data.element.style.display = '';
-				data.element.style.visibility = '';
+				setCssProps(data.element, { display: '', visibility: '' });
 			} else if ((filterType === '网络图片' || filterType === 'remote') && isRemote) {
-				data.element.style.display = '';
-				data.element.style.visibility = '';
+				setCssProps(data.element, { display: '', visibility: '' });
 			} else {
-				data.element.style.display = 'none';
+				setCssProps(data.element, { display: 'none' });
 			}
 		});
 
@@ -542,7 +550,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 			setTimeout(() => {
 				this.imageDataMap.forEach((data) => {
 					const el = data.element;
-					if (el && el.style.display !== 'none') {
+					if (el && window.getComputedStyle(el).display !== 'none') {
 						const rect = el.getBoundingClientRect();
 						data.position = {
 							top: rect.top + container.scrollTop,
@@ -585,9 +593,9 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 		imageDiv.addEventListener('contextmenu', (e) => {
 			e.preventDefault();
-			const img = imageDiv.querySelector('img');
+			const img = imageDiv.querySelector('img') as HTMLImageElement | null;
 			if (img) {
-				this.createContextMenu(e, img as HTMLImageElement);
+				this.createContextMenu(e, img);
 			}
 		});
 	}
@@ -617,7 +625,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 				log.error(() => `本地图片加载失败 (${img.src}): ${imagePath}`);
 
 				try {
-					const alternativePaths = await this.plugin.imageLoader.getAlternativeLocalPaths(imagePath);
+					const alternativePaths = this.plugin.imageLoader.getAlternativeLocalPaths(imagePath);
 					for (const path of alternativePaths) {
 						log.debug(() => `尝试替代路径: ${path}`);
 
@@ -735,32 +743,20 @@ export class CurrentNoteImageGalleryService extends Modal {
 		isWeiboImage = false
 	): Promise<void> {
 		try {
-			const controller = new AbortController();
-			// 增加超时时间到15秒，给大图片更多加载时间
-			const timeoutId = setTimeout(() => controller.abort(), 15000);
-
-			const fetchOptions: RequestInit = {
+			const response = await requestUrl({
+				url: imagePath,
 				method: 'GET',
-				credentials: 'omit',
-				cache: 'no-cache',
-				signal: controller.signal,
 				headers: {
-					'Cache-Control': 'no-cache',
-					'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
 					'Referer': isWeiboImage ? 'https://weibo.com/' : 'https://obsidian.md/',
 					'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-				},
-				mode: isWeiboImage ? 'no-cors' : undefined
-			};
+				}
+			});
 
-			const response = await fetch(imagePath, fetchOptions);
-			clearTimeout(timeoutId);
-
-			if (!response.ok && !isWeiboImage) { // no-cors 模式下无法检查状态
+			if (response.status !== 200 && !isWeiboImage) { // no-cors 模式下无法检查状态
 				throw new Error(`HTTP error: ${response.status}`);
 			}
 
-			const blob = await response.blob();
+			const blob = new Blob([response.arrayBuffer], { type: response.headers['content-type'] || 'image/jpeg' });
 			const objectUrl = this.resourceManager.createObjectURL(imagePath, blob);
 
 			img.onload = () => {
@@ -785,8 +781,8 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 			try {
 				// 尝试缓存图片
-				const contentType = blob.type || response.headers.get('content-type') || 'image/jpeg';
-				const etag = response.headers.get('etag');
+				const contentType = blob.type || response.headers['content-type'] || 'image/jpeg';
+				const etag = response.headers['etag'];
 
 				log.info(() => `开始缓存网络图片: ${imagePath}`);
 				log.debug(() => `缓存详情 - 类型: ${contentType}, 大小: ${Math.round(blob.size / 1024)}KB`);
@@ -850,31 +846,33 @@ export class CurrentNoteImageGalleryService extends Modal {
 				// 将画布内容转换为Blob
 				// 注意：如果canvas被污染(tainted)，toBlob会失败
 				try {
-					canvas.toBlob(async (blob) => {
+					canvas.toBlob((blob) => {
 						if (!blob) {
 							log.error(() => `无法从画布创建Blob: ${imagePath}`);
 							return;
 						}
 
-						try {
-							log.debug(() => `从直接加载的图片创建缓存: ${imagePath}, 大小: ${Math.round(blob.size / 1024)}KB`);
+						void (async () => {
+							try {
+								log.debug(() => `从直接加载的图片创建缓存: ${imagePath}, 大小: ${Math.round(blob.size / 1024)}KB`);
 
-							// 转换为ArrayBuffer
-							const arrayBuffer = await blob.arrayBuffer();
+								// 转换为ArrayBuffer
+								const arrayBuffer = await blob.arrayBuffer();
 
-							// 调用缓存服务
-							await this.plugin.imageCacheService.cacheImage(
-								imagePath,
-								arrayBuffer,
-								undefined,
-								blob.type || 'image/jpeg'
-							);
+								// 调用缓存服务
+								await this.plugin.imageCacheService.cacheImage(
+									imagePath,
+									arrayBuffer,
+									undefined,
+									blob.type || 'image/jpeg'
+								);
 
-							log.debug(() => `成功缓存直接加载的图片: ${imagePath}`);
-						} catch (error) {
-							const errorMsg = error instanceof Error ? error.message : String(error);
-							log.error(() => `缓存直接加载的图片失败: ${imagePath}, 错误: ${errorMsg}`, error instanceof Error ? error : undefined);
-						}
+								log.debug(() => `成功缓存直接加载的图片: ${imagePath}`);
+							} catch (error) {
+								const errorMsg = error instanceof Error ? error.message : String(error);
+								log.error(() => `缓存直接加载的图片失败: ${imagePath}, 错误: ${errorMsg}`, error instanceof Error ? error : undefined);
+							}
+						})();
 					}, 'image/jpeg', 0.95); // 使用JPEG格式，95%质量
 				} catch (blobError) {
 					// 捕获SecurityError (canvas被污染时)
@@ -903,7 +901,8 @@ export class CurrentNoteImageGalleryService extends Modal {
 		};
 
 		img.onerror = (e) => {
-			log.error(() => `图片直接加载失败: ${imagePath}, 错误: ${e}`);
+			const errorMsg = e instanceof Error ? e.message : String(e);
+			log.error(() => `图片直接加载失败: ${imagePath}, 错误: ${errorMsg}`);
 
 			// 对于本地图片尝试替代路径
 			if (!imagePath.startsWith('http://') && !imagePath.startsWith('https://')) {
@@ -1086,20 +1085,20 @@ export class CurrentNoteImageGalleryService extends Modal {
 		const baseHeight = 10;
 		const heightSpan = Math.min(Math.ceil(ratio * baseHeight), 30);
 
-		imageDiv.style.gridRowEnd = `span ${heightSpan}`;
+		setCssProps(imageDiv, { gridRowEnd: `span ${heightSpan}` });
 
 		// 强制设置图片可见
-		img.style.opacity = '1';
+		setCssProps(img, { opacity: '1' });
 		img.setAttribute('complete', 'true');
 		img.classList.add('loaded');
 
-		img.offsetHeight; // 触发重绘
+		void img.offsetHeight; // 触发重绘
 
 		// 确保样式被应用（额外保障）
 		setTimeout(() => {
-			if (img.style.opacity !== '1') {
+			if (window.getComputedStyle(img).opacity !== '1') {
 				log.debug(() => `修复延迟显示: ${imagePath}`);
-				img.style.opacity = '1';
+				setCssProps(img, { opacity: '1' });
 				img.classList.add('loaded');
 
 				// 触发父元素重新计算布局
@@ -1165,7 +1164,8 @@ export class CurrentNoteImageGalleryService extends Modal {
 							};
 
 							img.onerror = (e) => {
-								log.error(() => `✗ 缓存图片加载失败: ${imagePath}, 错误: ${e}`);
+								const errorMsg = e instanceof Error ? e.message : String(e);
+								log.error(() => `✗ 缓存图片加载失败: ${imagePath}, 错误: ${errorMsg}`);
 								reject(e);
 							};
 
@@ -1266,32 +1266,34 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 			// 将画布内容转换为Blob
 			await new Promise<void>((blobResolve) => {
-				canvas.toBlob(async (blob) => {
+				canvas.toBlob((blob) => {
 					if (!blob) {
 						log.error(() => `无法从画布创建Blob: ${imagePath}`);
 						blobResolve();
 						return;
 					}
 
-					try {
-						log.debug(() => `从直接加载的图片创建缓存: ${imagePath}, 大小: ${Math.round(blob.size / 1024)}KB`);
+					void (async () => {
+						try {
+							log.debug(() => `从直接加载的图片创建缓存: ${imagePath}, 大小: ${Math.round(blob.size / 1024)}KB`);
 
-						// 转换为ArrayBuffer
-						const arrayBuffer = await blob.arrayBuffer();
+							// 转换为ArrayBuffer
+							const arrayBuffer = await blob.arrayBuffer();
 
-						// 调用缓存服务
-						await this.plugin.imageCacheService.cacheImage(
-							imagePath,
-							arrayBuffer,
-							undefined,
-							blob.type || 'image/jpeg'
-						);
+							// 调用缓存服务
+							await this.plugin.imageCacheService.cacheImage(
+								imagePath,
+								arrayBuffer,
+								undefined,
+								blob.type || 'image/jpeg'
+							);
 
-						log.info(() => `✓ 成功缓存直接加载的图片: ${imagePath}`);
-					} catch (error) {
-						log.error(() => `缓存直接加载的图片失败: ${imagePath}`, error);
-					}
-					blobResolve();
+							log.info(() => `✓ 成功缓存直接加载的图片: ${imagePath}`);
+						} catch (error) {
+							log.error(() => `缓存直接加载的图片失败: ${imagePath}`, error);
+						}
+						blobResolve();
+					})();
 				}, 'image/jpeg', 0.9);
 			});
 		} catch (error) {
@@ -1320,7 +1322,8 @@ export class CurrentNoteImageGalleryService extends Modal {
 					};
 
 					img.onerror = (e) => {
-						log.error(() => `Cached Weibo image load error: ${e}`);
+						const errorMsg = e instanceof Error ? e.message : String(e);
+						log.error(() => `Cached Weibo image load error: ${errorMsg}`);
 						reject(e);
 					};
 
@@ -1390,8 +1393,8 @@ export class CurrentNoteImageGalleryService extends Modal {
 				const baseHeight = 10;
 				const heightSpan = Math.min(Math.ceil(ratio * baseHeight), 30);
 
-				imageDiv.style.gridRowEnd = `span ${heightSpan}`;
-				img.style.opacity = '1';
+				setCssProps(imageDiv, { gridRowEnd: `span ${heightSpan}` });
+				setCssProps(img, { opacity: '1' });
 				this.loadedImages++;
 				this.updateProgressBar();
 
@@ -1470,11 +1473,11 @@ export class CurrentNoteImageGalleryService extends Modal {
 		if (retryCount < MAX_RETRIES) {
 			log.debug(() => `Retrying after error (${retryCount + 1}/${MAX_RETRIES})`);
 			setTimeout(() => {
-				const img = imageDiv.querySelector('img');
-				const loadingText = imageDiv.querySelector('.loading-text');
+				const img = imageDiv.querySelector('img') as HTMLImageElement | null;
+				const loadingText = imageDiv.querySelector('.loading-text') as HTMLElement | null;
 				if (img && loadingText) {
-					const imgSrc = (img as HTMLImageElement).src;
-					this.loadWeiboImage(imgSrc, img as HTMLImageElement, imageDiv, loadingText as HTMLElement, retryCount + 1);
+					const imgSrc = img.src;
+					void this.loadWeiboImage(imgSrc, img, imageDiv, loadingText, retryCount + 1);
 				}
 			}, 1000 * (retryCount + 1));
 		} else {
@@ -1672,9 +1675,9 @@ export class CurrentNoteImageGalleryService extends Modal {
 	private createContextMenu(e: MouseEvent, img: HTMLImageElement) {
 		const menu = document.createElement('div');
 		menu.addClass('image-context-menu');
-		menu.style.position = 'fixed';
-		menu.style.left = e.pageX + 'px';
-		menu.style.top = e.pageY + 'px';
+		setCssProps(menu, { position: "fixed" });
+		setCssProps(menu, { left: e.pageX + "px" });
+		setCssProps(menu, { top: e.pageY + "px" });
 
 		const copyOption = menu.createDiv('menu-item');
 		copyOption.setText('复制图片');
@@ -1721,15 +1724,15 @@ export class CurrentNoteImageGalleryService extends Modal {
 		// 添加缩放功能
 		const zoomImage = (scale: number) => {
 			if (!isZoomed && scale > 1) {
-				img.style.transform = `scale(${scale})`;
+				setCssProps(img, { transform: `scale(${scale})` });
 				isZoomed = true;
 				initialScale = scale;
 			} else if (isZoomed && scale === 1) {
-				img.style.transform = 'scale(1)';
+				setCssProps(img, { transform: 'scale(1)' });
 				isZoomed = false;
 			} else if (isZoomed) {
 				// 已缩放状态下的额外缩放
-				img.style.transform = `scale(${initialScale * scale})`;
+				setCssProps(img, { transform: `scale(${initialScale * scale})` });
 			}
 		};
 
@@ -1755,12 +1758,12 @@ export class CurrentNoteImageGalleryService extends Modal {
 			currentIndex = (newIndex + this.images.length) % this.images.length;
 
 			// 显示加载提示
-			loadingText.style.display = 'block';
+			setCssProps(loadingText, { display: 'block' });
 			loadingText.setText('加载中...');
 
 			// 重置缩放状态
 			isZoomed = false;
-			img.style.transform = 'scale(1)';
+			setCssProps(img, { transform: 'scale(1)' });
 
 			// 更新图片
 			const imagePath = this.images[currentIndex];
@@ -1768,11 +1771,11 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 			// 先设置加载完成和错误的回调，再设置 src
 			img.onload = () => {
-				loadingText.style.display = 'none';
+				setCssProps(loadingText, { display: 'none' });
 			};
 
 			img.onerror = () => {
-				loadingText.style.display = 'none';
+				setCssProps(loadingText, { display: 'none' });
 				loadingText.setText('加载失败');
 				setTimeout(() => {
 					loadingText.setText('加载中...');
@@ -1836,7 +1839,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 			// 检查图片是否已经加载完成（处理缓存情况）
 			if (img.complete && img.naturalHeight !== 0) {
-				loadingText.style.display = 'none';
+				setCssProps(loadingText, { display: 'none' });
 			}
 
 			// 更新计数器
@@ -1850,22 +1853,22 @@ export class CurrentNoteImageGalleryService extends Modal {
 		};
 
 		// 初始预加载
-		this.preloadAdjacentImages(initialIndex);
+		void this.preloadAdjacentImages(initialIndex);
 
 		// 添加左右导航按钮
 		if (this.images.length > 1) {
 			const prevBtn = lightbox.createDiv('lightbox-nav prev');
-			prevBtn.innerHTML = '&#10094;'; // 左箭头
+			prevBtn.setText('‹'); // 左箭头
 			prevBtn.onclick = (e) => {
 				e.stopPropagation();
-				navigateImage(currentIndex - 1);
+				void navigateImage(currentIndex - 1);
 			};
 
 			const nextBtn = lightbox.createDiv('lightbox-nav next');
-			nextBtn.innerHTML = '&#10095;'; // 右箭头
+			nextBtn.setText('›'); // 右箭头
 			nextBtn.onclick = (e) => {
 				e.stopPropagation();
-				navigateImage(currentIndex + 1);
+				void navigateImage(currentIndex + 1);
 			};
 		}
 
@@ -1877,14 +1880,14 @@ export class CurrentNoteImageGalleryService extends Modal {
 		const controls = lightbox.createDiv('lightbox-controls');
 
 		const zoomOutBtn = controls.createDiv('zoom-button zoom-out');
-		zoomOutBtn.innerHTML = '−';
+		zoomOutBtn.setText('−');
 		zoomOutBtn.onclick = (e) => {
 			e.stopPropagation();
 			zoomImage(1); // 重置缩放
 		};
 
 		const zoomInBtn = controls.createDiv('zoom-button zoom-in');
-		zoomInBtn.innerHTML = '+';
+		zoomInBtn.setText('+');
 		zoomInBtn.onclick = (e) => {
 			e.stopPropagation();
 			zoomImage(isZoomed ? 1.5 : 2);
@@ -1896,7 +1899,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 		closeBtn.onclick = () => lightbox.remove();
 
 		// 初始图片
-		navigateImage(currentIndex);
+		void navigateImage(currentIndex);
 
 		document.body.appendChild(lightbox);
 
@@ -1910,10 +1913,10 @@ export class CurrentNoteImageGalleryService extends Modal {
 		const handleKeyDown = (e: KeyboardEvent) => {
 			switch (e.key) {
 				case 'ArrowLeft':
-					navigateImage(currentIndex - 1);
+					void navigateImage(currentIndex - 1);
 					break;
 				case 'ArrowRight':
-					navigateImage(currentIndex + 1);
+					void navigateImage(currentIndex + 1);
 					break;
 				case 'Escape':
 					lightbox.remove();

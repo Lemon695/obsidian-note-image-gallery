@@ -80,7 +80,7 @@ class WikiImageExtractor implements ImageExtractor {
  */
 class MarkdownImageExtractor implements ImageExtractor {
 	// 修改正则：不匹配前面是 ]] 的情况（混合格式）
-	private readonly regex = /(?<!]])!\[.*?]\((.*?)\)/g;
+	private readonly regex = /(?<!]])![.*?]\((.*?)\)/g;
 
 	extract(content: string): string[] {
 		const images: string[] = [];

@@ -35,6 +35,6 @@ export class RetryHandler {
 			}
 		}
 
-		throw lastError;
+		throw lastError || new Error('Unknown error occurred during retry');
 	}
 }
