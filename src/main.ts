@@ -33,7 +33,7 @@ export default class NoteImageGalleryPlugin extends Plugin {
 
 		this.addCommand({
 			id: 'current-file',
-			name: 'Current File',
+			name: 'Current file',
 			checkCallback: (checking: boolean) => {
 				const activeFile = this.app.workspace.getActiveFile();
 				if (activeFile && activeFile.extension === 'md') {
