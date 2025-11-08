@@ -32,8 +32,8 @@ export default class NoteImageGalleryPlugin extends Plugin {
 		this.addSettingTab(new NoteImageGallerySettingTab(this.app, this));
 
 		this.addCommand({
-			id: 'open-gallery',
-			name: 'Open gallery',
+			id: 'current-file',
+			name: 'Current File',
 			checkCallback: (checking: boolean) => {
 				const activeFile = this.app.workspace.getActiveFile();
 				if (activeFile && activeFile.extension === 'md') {
