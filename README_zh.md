@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/Lemon695/obsidian-note-image-gallery/releases"><img src="https://img.shields.io/github/v/release/Lemon695/obsidian-note-image-gallery?style=for-the-badge" alt="Release"></a>
-  <a href="https://github.com/Lemon695/obsidian-note-image-gallery/blob/main/LICENSE"><img src="https://img.shields.io/github/license/Lemon695/obsidian-note-image-gallery?style=for-the-badge" alt="License"></a>
+  <a href="https://github.com/Lemon695/obsidian-note-image-gallery/blob/master/LICENSE"><img src="https://img.shields.io/github/license/Lemon695/obsidian-note-image-gallery?style=for-the-badge" alt="License"></a>
 </p>
 
 <p align="center">
