@@ -9,6 +9,22 @@
   <a href="https://github.com/Lemon695/obsidian-note-image-gallery/blob/main/LICENSE"><img src="https://img.shields.io/github/license/Lemon695/obsidian-note-image-gallery?style=for-the-badge" alt="License"></a>
 </p>
 
+<p align="center">
+  <a href="README.md">English</a> | <a href="README_zh.md">简体中文</a>
+</p>
+
+---
+
+## 🎬 Demo
+
+### 1、Enable via Command Palette
+
+![gif-2025-obsidian-v1.gif](_resources/gif/gif-2025-obsidian-v1.gif)
+
+### 2、Enable via Commander Plugin
+
+![gif-2025-obsidian-v2.gif](_resources/gif/gif-2025-obsidian-v2.gif)
+
 ---
 
 ## ✨ Features
@@ -36,6 +52,10 @@
   - Configurable cache size and expiration
   - LFU+LRU hybrid cache eviction algorithm
   - Automatic cache cleanup and management
+- **🌍 Internationalization**:
+  - Auto-detects Obsidian language settings
+  - Full support for English and Chinese (Simplified)
+  - Easy to extend for more languages
 - **📱 Cross-Platform**: Works on desktop and mobile devices
 
 ---
