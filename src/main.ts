@@ -16,7 +16,7 @@ export default class NoteImageGalleryPlugin extends Plugin {
 	public settings: Settings;
 
 	async onload() {
-		console.log('Note Image Gallery: Loading plugin v' + this.manifest.version);
+		console.log(t('loadingPlugin') + this.manifest.version);
 
 		// 调试语言设置
 		//debugLocale();
@@ -52,7 +52,7 @@ export default class NoteImageGalleryPlugin extends Plugin {
 			}
 		});
 
-		this.addRibbonIcon('image-plus', 'Open gallery', () => {
+		this.addRibbonIcon('image-plus', t('openGallery'), () => {
 			void this.openImageGalleryModal();
 		});
 
@@ -61,7 +61,7 @@ export default class NoteImageGalleryPlugin extends Plugin {
 			name: t('clearImageCache'),
 			callback: () => {
 				void this.imageCacheService.clearAllCache();
-				new Notice('Image cache cleared');
+				new Notice(t('imageCacheCleared'));
 			}
 		});
 	}
@@ -79,7 +79,7 @@ export default class NoteImageGalleryPlugin extends Plugin {
 		try {
 			const images = await this.getCurrentNoteImages();
 			if (!images || images.length === 0) {
-				new Notice('No images found in current note');
+				new Notice(t('noImagesFound'));
 				return;
 			}
 
@@ -87,7 +87,7 @@ export default class NoteImageGalleryPlugin extends Plugin {
 			this.currentNoteImageGalleryService.open();
 		} catch (error) {
 			log.error(() => 'Error opening image gallery modal:', error);
-			new Notice('Error opening image gallery');
+			new Notice(t('errorOpeningGallery'));
 		}
 	}
 
@@ -111,9 +111,9 @@ export default class NoteImageGalleryPlugin extends Plugin {
 		// 确保缓存索引保存到磁盘
 		if (this.imageCacheService) {
 			void this.imageCacheService.saveCacheIndex().then(() => {
-				log.debug(() => '缓存索引已保存');
+				log.debug(() => t('cacheIndexSaved'));
 			}).catch((e) => {
-				log.error(() => '保存缓存索引失败:', e);
+				log.error(() => t('saveCacheIndexFailed'), e);
 			});
 		}
 

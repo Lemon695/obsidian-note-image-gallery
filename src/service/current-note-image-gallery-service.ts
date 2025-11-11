@@ -3,6 +3,7 @@ import NoteImageGalleryPlugin from "../main";
 import {log} from "../utils/log-utils";
 import {RetryHandler} from "../utils/retry-handler";
 import {ResourceManager} from "../utils/resource-manager";
+import {t} from "../i18n/locale";
 
 // Helper function to set CSS properties
 function setCssProps(element: HTMLElement | Element, styles: Record<string, string>): void {
@@ -83,7 +84,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 		const toolbar = contentEl.createDiv('modal-toolbar');
 		const titleEl = toolbar.createDiv('modal-title');
-		titleEl.setText(`图片墙 (${this.totalImages} 张图片)`);
+		titleEl.setText(t('imageGalleryTitle', {count: this.totalImages.toString()}));
 
 		const progressContainer = toolbar.createDiv('progress-container');
 		progressContainer.createEl('progress', {
@@ -99,17 +100,17 @@ export class CurrentNoteImageGalleryService extends Modal {
 		const filterToolbar = toolbar.createDiv('filter-toolbar');
 
 		const sortContainer = filterToolbar.createDiv('sort-container');
-		sortContainer.createSpan({text: '排序: '});
+		sortContainer.createSpan({text: t('sort')});
 		const sortSelect = sortContainer.createEl('select', {cls: 'sort-select'});
-		sortSelect.createEl('option', {text: '默认排序', value: 'default'});
-		sortSelect.createEl('option', {text: '按尺寸（大到小）', value: 'size-desc'});
-		sortSelect.createEl('option', {text: '按尺寸（小到大）', value: 'size-asc'});
+		sortSelect.createEl('option', {text: t('defaultSort'), value: 'default'});
+		sortSelect.createEl('option', {text: t('sortBySizeDesc'), value: 'size-desc'});
+		sortSelect.createEl('option', {text: t('sortBySizeAsc'), value: 'size-asc'});
 
 		const filterContainer = filterToolbar.createDiv('filter-container');
-		filterContainer.createSpan({text: '筛选: '});
-		const allBtn = filterContainer.createEl('button', {text: '全部', cls: 'filter-btn active'});
-		const localBtn = filterContainer.createEl('button', {text: '本地图片', cls: 'filter-btn'});
-		const remoteBtn = filterContainer.createEl('button', {text: '网络图片', cls: 'filter-btn'});
+		filterContainer.createSpan({text: t('filter')});
+		const allBtn = filterContainer.createEl('button', {text: t('all'), cls: 'filter-btn active'});
+		const localBtn = filterContainer.createEl('button', {text: t('localImages'), cls: 'filter-btn'});
+		const remoteBtn = filterContainer.createEl('button', {text: t('networkImages'), cls: 'filter-btn'});
 
 		sortSelect.addEventListener('change', () => {
 			this.sortImages(sortSelect.value);
@@ -214,7 +215,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 									const imgEl = imageData.element.querySelector('img') as HTMLImageElement || imageData.element.createEl('img');
 									const loadingTextEl = (imageData.element.querySelector('.loading-text') ||
 										imageData.element.createDiv('loading-text')) as HTMLElement;
-									loadingTextEl.setText('加载中...');
+									loadingTextEl.setText(t('loading'));
 
 									await this.loadImageUnified(path, imgEl, imageData.element, loadingTextEl, isWeiboImage);
 								},
@@ -222,7 +223,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 							);
 						} catch (error) {
 							imageData.hasError = true;
-							this.handleImageError(imageData.element, '加载失败');
+							this.handleImageError(imageData.element, t('loadingFailed'));
 							this.loadedImages++;
 							this.updateProgressBar();
 						} finally {
@@ -636,7 +637,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 						}
 					}
 
-					this.handleImageError(imageDiv, '找不到图片');
+					this.handleImageError(imageDiv, t('imageNotFound'));
 					this.loadedImages++;
 					this.updateProgressBar();
 
@@ -652,7 +653,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 					log.error(() => `处理替代路径时出错:`, error);
 
 					// 显示错误
-					this.handleImageError(imageDiv, '处理失败');
+					this.handleImageError(imageDiv, t('processingFailed'));
 					this.loadedImages++;
 					this.updateProgressBar();
 
@@ -1154,7 +1155,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 					if (cachedImage) {
 						log.info(() => `✓ 缓存命中，从缓存加载: ${imagePath}`);
-						loadingText.setText('从缓存加载...');
+						loadingText.setText(t('loadingFromCache'));
 
 						await new Promise<void>((resolve, reject) => {
 							img.onload = () => {
@@ -1618,10 +1619,10 @@ export class CurrentNoteImageGalleryService extends Modal {
 				await this.writeToClipboard(blob);
 			}
 
-			new Notice('图片已复制到剪贴板');
+			new Notice(t('imageCopied'));
 		} catch (err) {
 			log.error(() => 'Copy failed:', err);
-			new Notice('复制失败，请重试');
+			new Notice(t('copyFailed'));
 		}
 	}
 
@@ -1665,10 +1666,10 @@ export class CurrentNoteImageGalleryService extends Modal {
 			a.download = filename;
 			a.click();
 
-			new Notice('正在下载图片');
+			new Notice(t('downloadingImage'));
 		} catch (error) {
 			log.error(() => '下载失败:', error);
-			new Notice('图片下载失败');
+			new Notice(t('downloadFailed'));
 		}
 	}
 
@@ -1680,14 +1681,14 @@ export class CurrentNoteImageGalleryService extends Modal {
 		setCssProps(menu, { top: e.pageY + "px" });
 
 		const copyOption = menu.createDiv('menu-item');
-		copyOption.setText('复制图片');
+		copyOption.setText(t('copyImage'));
 		copyOption.onclick = async () => {
 			await this.copyImageToClipboard(img);
 			menu.remove();
 		};
 
 		const downloadOption = menu.createDiv('menu-item');
-		downloadOption.setText('下载图片');
+		downloadOption.setText(t('downloadImage'));
 		downloadOption.onclick = () => {
 			this.downloadImage(img);
 			menu.remove();
@@ -1714,7 +1715,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 		const img = imgContainer.createEl('img');
 
 		const loadingText = lightbox.createDiv('loading-text');
-		loadingText.setText('加载中...');
+		loadingText.setText(t('loading'));
 
 		// 追踪当前图片索引的变量
 		let currentIndex = initialIndex;
@@ -1759,7 +1760,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 			// 显示加载提示
 			setCssProps(loadingText, { display: 'block' });
-			loadingText.setText('加载中...');
+			loadingText.setText(t('loading'));
 
 			// 重置缩放状态
 			isZoomed = false;
@@ -1776,9 +1777,9 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 			img.onerror = () => {
 				setCssProps(loadingText, { display: 'none' });
-				loadingText.setText('加载失败');
+				loadingText.setText(t('loadingFailed'));
 				setTimeout(() => {
-					loadingText.setText('加载中...');
+					loadingText.setText(t('loading'));
 				}, 2000);
 			};
 
@@ -1794,7 +1795,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 						const cachedImage = await this.plugin.imageCacheService.getCachedImage(imagePath);
 						if (cachedImage) {
 							log.debug(() => `Lightbox: 从缓存加载网络图片 ${imagePath}`);
-							loadingText.setText('从缓存加载...');
+							loadingText.setText(t('loadingFromCache'));
 							img.src = cachedImage.data;
 						} else {
 							log.debug(() => `Lightbox: 缓存未命中，触发图片加载 ${imagePath}`);

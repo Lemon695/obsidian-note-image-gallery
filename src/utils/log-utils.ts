@@ -1,3 +1,4 @@
+import {t} from '../i18n/locale';
 
 export enum LogLevel {
 	DEBUG = 0,
@@ -37,7 +38,7 @@ export class Logger {
 		this.enabledCategories = new Set(Object.values(LogCategory));
 
 		// 输出初始化信息
-		this.info(`日志系统初始化: 级别=${LogLevel[logLevel]}, 调试模式=${debugMode}`);
+		this.info(() => t('logSystemInit', {level: LogLevel[logLevel], debugMode: debugMode.toString()}));
 	}
 
 	setEnabledCategories(categories: LogCategory[]): void {
@@ -54,7 +55,7 @@ export class Logger {
 	 */
 	public setDebugMode(enabled: boolean): void {
 		if (this.debugMode !== enabled) {
-			console.debug(`[${this.pluginName}] 调试模式${enabled ? '开启' : '关闭'}`);
+			console.debug(`[${this.pluginName}] ${t('debugModeToggle', {status: enabled ? t('on') : t('off')})}`);
 			this.debugMode = enabled;
 		}
 	}
@@ -123,7 +124,7 @@ export class Logger {
 	 */
 	public setLogLevel(level: LogLevel): void {
 		this.logLevel = level;
-		this.info(`日志级别已设置为: ${LogLevel[level]}`);
+		this.info(() => t('logLevelSet', {level: LogLevel[level]}));
 	}
 
 	/**

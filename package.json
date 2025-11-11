@@ -1,6 +1,6 @@
 {
 	"name": "obsidian-note-image-gallery",
-	"version": "1.0.7",
+	"version": "1.0.8",
 	"description": "An Obsidian plugin to display note's images in a gallery view",
 	"main": "main.js",
 	"scripts": {

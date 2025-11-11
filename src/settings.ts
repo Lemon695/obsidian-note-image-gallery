@@ -1,6 +1,7 @@
 import {App, Notice, PluginSettingTab, Setting} from 'obsidian';
 import NoteImageGalleryPlugin from './main';
 import {log} from './utils/log-utils';
+import {t} from './i18n/locale';
 
 export interface Settings {
 	enableCache: boolean;
@@ -35,12 +36,12 @@ export class NoteImageGallerySettingTab extends PluginSettingTab {
 		containerEl.empty();
 
 		new Setting(containerEl)
-			.setName('图片墙设置')
+			.setName(t('imageGallerySettings'))
 			.setHeading();
 
 		new Setting(containerEl)
-			.setName('启用图片缓存')
-			.setDesc('启用后，将缓存远程图片以加快加载速度')
+			.setName(t('enableCache'))
+			.setDesc(t('enableCacheDesc'))
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.enableCache)
 				.onChange(async (value) => {
@@ -49,15 +50,15 @@ export class NoteImageGallerySettingTab extends PluginSettingTab {
 				}));
 
 		const cacheAgeSetting = new Setting(containerEl)
-			.setName('缓存有效期')
-			.setDesc(`图片缓存的最大有效期: ${this.plugin.settings.maxCacheAge} 天`)
+			.setName(t('cacheValidPeriod'))
+			.setDesc(t('cacheValidPeriodDesc', {days: this.plugin.settings.maxCacheAge.toString()}))
 			.addSlider(slider => slider
 				.setLimits(1, 60, 1)
 				.setValue(this.plugin.settings.maxCacheAge)
 				.setDynamicTooltip()
 				.onChange(async (value) => {
 					if (value < 1 || value > 60 || !Number.isInteger(value)) {
-						new Notice('缓存有效期必须在1-60天之间');
+						new Notice(t('cacheValidPeriodError'));
 						return;
 					}
 
@@ -66,7 +67,7 @@ export class NoteImageGallerySettingTab extends PluginSettingTab {
 					this.plugin.imageCacheService.setMaxCacheAge(value * 24 * 60 * 60 * 1000);
 
 					// 更新描述显示当前值
-					cacheAgeSetting.setDesc(`图片缓存的最大有效期: ${value} 天`);
+					cacheAgeSetting.setDesc(t('cacheValidPeriodValue', {value: value.toString()}));
 				}));
 
 		let cacheSizeInMB = "0.00";
@@ -75,24 +76,24 @@ export class NoteImageGallerySettingTab extends PluginSettingTab {
 			if (typeof cacheSize === 'number' && !isNaN(cacheSize) && cacheSize > 0) {
 				cacheSizeInMB = (cacheSize / (1024 * 1024)).toFixed(2);
 			} else {
-				log.debug(() => '缓存大小为0或无效');
+				log.debug(() => t('cacheSizeZeroOrInvalid'));
 			}
 		} catch (e) {
-			log.error(() => '获取缓存大小失败:',e);
-			new Notice('无法获取缓存大小，请尝试重新初始化缓存');
+			log.error(() => t('getCacheSizeFailed'),e);
+			new Notice(t('unableToGetCacheSize'));
 		}
 
 		new Setting(containerEl)
-			.setName('缓存状态')
+			.setName(t('cacheStatus'))
 			.setHeading();
 
 		const cacheStatusEl = containerEl.createEl('p', {
-			text: `当前缓存大小: ${cacheSizeInMB} MB / ${this.plugin.settings.maxCacheSize} MB`
+			text: t('currentCacheSize', {size: cacheSizeInMB, maxSize: this.plugin.settings.maxCacheSize.toString()})
 		});
 
 		const cacheSizeSetting = new Setting(containerEl)
-			.setName('最大缓存大小')
-			.setDesc(`图片缓存的最大大小: ${this.plugin.settings.maxCacheSize} MB`)
+			.setName(t('maxCacheSize'))
+			.setDesc(t('maxCacheSizeDesc', {size: this.plugin.settings.maxCacheSize.toString()}))
 			.addSlider(slider => slider
 				.setLimits(10, 300, 5)
 				.setValue(this.plugin.settings.maxCacheSize)
@@ -103,18 +104,18 @@ export class NoteImageGallerySettingTab extends PluginSettingTab {
 					this.plugin.imageCacheService.setMaxCacheSize(value * 1024 * 1024);
 
 					// 更新描述显示当前值
-					cacheSizeSetting.setDesc(`图片缓存的最大大小: ${value} MB`);
+					cacheSizeSetting.setDesc(t('maxCacheSizeDesc', {size: value.toString()}));
 
 					// 更新缓存状态显示中的最大缓存大小
 					const currentCacheSize = (this.plugin.imageCacheService.getCacheSize() / (1024 * 1024)).toFixed(2);
-					cacheStatusEl.setText(`当前缓存大小: ${currentCacheSize} MB / ${value} MB`);
+					cacheStatusEl.setText(t('currentCacheSize', {size: currentCacheSize, maxSize: value.toString()}));
 				}));
 
 		new Setting(containerEl)
-			.setName('刷新缓存状态')
-			.setDesc('重新计算缓存大小')
+			.setName(t('refreshCacheStatus'))
+			.setDesc(t('recalculateCacheSize'))
 			.addButton(button => button
-				.setButtonText('刷新')
+				.setButtonText(t('refresh'))
 				.onClick(() => {
 					void (async () => {
 						// 重新初始化缓存以获取最新状态
@@ -122,16 +123,16 @@ export class NoteImageGallerySettingTab extends PluginSettingTab {
 
 						// 更新显示的缓存大小
 						const newCacheSizeInMB = (this.plugin.imageCacheService.getCacheSize() / (1024 * 1024)).toFixed(2);
-						cacheStatusEl.setText(`当前缓存大小: ${newCacheSizeInMB} MB / ${this.plugin.settings.maxCacheSize} MB`);
+						cacheStatusEl.setText(t('currentCacheSize', {size: newCacheSizeInMB, maxSize: this.plugin.settings.maxCacheSize.toString()}));
 					})();
 				}));
 
 		// 添加清除缓存按钮
 		new Setting(containerEl)
-			.setName('清除缓存')
-			.setDesc('删除所有缓存的图片')
+			.setName(t('clearCache'))
+			.setDesc(t('clearCacheDesc'))
 			.addButton(button => button
-				.setButtonText('清除全部缓存')
+				.setButtonText(t('clearAllCache'))
 				.onClick(() => {
 					void (async () => {
 						await this.plugin.imageCacheService.clearAllCache();
@@ -141,19 +142,19 @@ export class NoteImageGallerySettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(containerEl)
-			.setName('Developer')
+			.setName(t('developer'))
 			.setHeading()
 
 		new Setting(containerEl)
-			.setName('Debug mode')
-			.setDesc('Enable debug mode to log detailed information to the console.')
+			.setName(t('debugMode'))
+			.setDesc(t('debugModeDesc'))
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.debugMode)
 				.onChange(async (value) => {
 					this.plugin.settings.debugMode = value;
 
 					log.setDebugMode(value);
-					log.debug(() => "调试模式已" + (value ? "启用" : "禁用"));
+					log.debug(() => t('debugModeStatus', {status: value ? t('enabled') : t('disabled')}));
 					await this.plugin.saveSettings();
 				}));
 	}
