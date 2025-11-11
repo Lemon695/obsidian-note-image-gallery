@@ -5,6 +5,7 @@ import {ImageCacheService} from './service/image-cache-service';
 import {ImageExtractorService} from "./service/image-extractor-service";
 import {log} from './utils/log-utils';
 import {ObsidianImageLoader} from "./service/obsidian-image-loader";
+import {t, debugLocale} from './i18n/locale';
 
 export default class NoteImageGalleryPlugin extends Plugin {
 
@@ -15,6 +16,11 @@ export default class NoteImageGalleryPlugin extends Plugin {
 	public settings: Settings;
 
 	async onload() {
+		console.log('Note Image Gallery: Loading plugin v' + this.manifest.version);
+
+		// 调试语言设置
+		//debugLocale();
+
 		await this.loadSettings();
 
 		log.setDebugMode(this.settings.debugMode);
@@ -33,7 +39,7 @@ export default class NoteImageGalleryPlugin extends Plugin {
 
 		this.addCommand({
 			id: 'current-file',
-			name: 'Current file',
+			name: t('currentFile'),
 			checkCallback: (checking: boolean) => {
 				const activeFile = this.app.workspace.getActiveFile();
 				if (activeFile && activeFile.extension === 'md') {
@@ -51,8 +57,8 @@ export default class NoteImageGalleryPlugin extends Plugin {
 		});
 
 		this.addCommand({
-			id: 'clear-cache',
-			name: 'Clear cache',
+			id: 'clear-image-cache',
+			name: t('clearImageCache'),
 			callback: () => {
 				void this.imageCacheService.clearAllCache();
 				new Notice('Image cache cleared');
@@ -80,7 +86,7 @@ export default class NoteImageGalleryPlugin extends Plugin {
 			this.currentNoteImageGalleryService = new CurrentNoteImageGalleryService(this.app, this, images);
 			this.currentNoteImageGalleryService.open();
 		} catch (error) {
-			log.error(() => 'Error opening image gallery modal:',error);
+			log.error(() => 'Error opening image gallery modal:', error);
 			new Notice('Error opening image gallery');
 		}
 	}
@@ -107,7 +113,7 @@ export default class NoteImageGalleryPlugin extends Plugin {
 			void this.imageCacheService.saveCacheIndex().then(() => {
 				log.debug(() => '缓存索引已保存');
 			}).catch((e) => {
-				log.error(() => '保存缓存索引失败:',e);
+				log.error(() => '保存缓存索引失败:', e);
 			});
 		}
 
