@@ -1808,6 +1808,12 @@ export class CurrentNoteImageGalleryService extends Modal {
 			zoomImage(isZoomed ? 1 : 2);
 		};
 
+		// 添加右键菜单
+		img.addEventListener('contextmenu', (e) => {
+			e.preventDefault();
+			this.createContextMenu(e, img);
+		});
+
 		const navigateImage = async (newIndex: number) => {
 			// 处理循环导航
 			currentIndex = (newIndex + this.images.length) % this.images.length;
