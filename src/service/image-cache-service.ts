@@ -360,6 +360,16 @@ export class ImageCacheService {
 	}
 
 	/**
+	 * 清理资源
+	 */
+	cleanup(): void {
+		if (this.debounceSaveTimeout) {
+			clearTimeout(this.debounceSaveTimeout);
+			this.debounceSaveTimeout = null;
+		}
+	}
+
+	/**
 	 * 清除过期缓存和超出大小限制的缓存
 	 */
 	async cleanCache() {

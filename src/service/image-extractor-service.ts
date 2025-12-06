@@ -62,8 +62,8 @@ class WikiImageExtractor implements ImageExtractor {
 	}
 
 	private cleanImagePath(path: string): string {
-		// 移除路径中的管道符号后的内容（如果存在）
-		const cleanPath = path.split('|')[0].trim();
+		// 移除路径中的管道符号和锚点后的内容
+		const cleanPath = path.split('|')[0].split('#')[0].trim();
 
 		// 过滤掉 markdown 文件
 		if (cleanPath.toLowerCase().endsWith('.md')) {
@@ -99,8 +99,8 @@ class MarkdownImageExtractor implements ImageExtractor {
 	}
 
 	private processImagePath(path: string): string {
-		// 处理图片路径，移除可能的引号和空格
-		const cleanPath = path.trim().replace(/['"]/g, '');
+		// 处理图片路径，移除可能的引号、空格和锚点
+		const cleanPath = path.trim().replace(/['"]/g, '').split('#')[0];
 
 		// 过滤掉 markdown 文件
 		if (cleanPath.toLowerCase().endsWith('.md')) {
@@ -191,6 +191,12 @@ export class ImageExtractorService {
 
 		// 排除 markdown 文件
 		if (path.toLowerCase().endsWith('.md')) {
+			return false;
+		}
+
+		// 排除非图片文件
+		const nonImageExtensions = /\.(pdf|mp3|mp4|mov|avi|mkv|doc|docx|txt|zip|rar|exe)$/i;
+		if (nonImageExtensions.test(path)) {
 			return false;
 		}
 

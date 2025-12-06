@@ -108,8 +108,9 @@ export default class NoteImageGalleryPlugin extends Plugin {
 	}
 
 	onunload() {
-		// 确保缓存索引保存到磁盘
+		// 清理缓存服务资源
 		if (this.imageCacheService) {
+			this.imageCacheService.cleanup();
 			void this.imageCacheService.saveCacheIndex().then(() => {
 				log.debug(() => t('cacheIndexSaved'));
 			}).catch((e) => {

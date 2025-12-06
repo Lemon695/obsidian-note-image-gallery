@@ -64,6 +64,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 	private retryHandler = new RetryHandler(3);
 	private currentSortType = 'default';  // 保存当前的排序类型
 	private sortDebounceTimer: number | null = null;  // 排序防抖定时器
+	private isClosed = false;  // 标记 Modal 是否已关闭
 
 	constructor(app: App, plugin: NoteImageGalleryPlugin, images: string[]) {
 		super(app);
@@ -134,9 +135,8 @@ export class CurrentNoteImageGalleryService extends Modal {
 		this.setupBatchLoading();
 		this.setupVirtualScroll();
 
-		this.images.forEach(imagePath => {
-			this.createImageElement(imagePath, imageWall);
-		});
+		// 分批渲染图片元素，避免阻塞主线程
+		void this.renderImagesInBatches(imageWall);
 	}
 
 	private setupLazyLoading() {
@@ -313,112 +313,57 @@ export class CurrentNoteImageGalleryService extends Modal {
 		const container = this.contentEl.querySelector('.image-wall-container');
 		if (!container) return;
 
-		// 视口可见区域的前后缓冲区大小（像素）
 		const BUFFER_SIZE = 1000;
-
-		// 创建绑定的更新函数引用，用于事件监听器
 		const boundUpdateElementPositions = () => this.updateElementPositions();
 
-		// 初始化位置信息
 		setTimeout(boundUpdateElementPositions, 500);
 
-		// 滚动时仅渲染可见区域附近的元素
+		// 简化的滚动处理
 		const scrollHandler = () => {
 			const scrollTop = container.scrollTop;
 			const viewportHeight = container.clientHeight;
 			const viewportTop = scrollTop - BUFFER_SIZE;
 			const viewportBottom = scrollTop + viewportHeight + BUFFER_SIZE;
 
-			// 获取当前激活的筛选按钮
 			const activeFilterBtn = this.contentEl.querySelector('.filter-btn.active');
-			const currentFilter = activeFilterBtn ? activeFilterBtn.textContent?.toLowerCase() : 'all';
+			const currentFilter = activeFilterBtn?.textContent?.toLowerCase() || 'all';
 
 			this.imageDataMap.forEach((data) => {
 				if (!data.position) return;
 
-				const imagePath = data.path;
-				const isRemote = imagePath.startsWith('http://') || imagePath.startsWith('https://');
-				const matchesFilter =
-					currentFilter === '全部' || currentFilter === 'all' ||
-					((currentFilter === '本地图片' || currentFilter === 'local') && !isRemote) ||
-					((currentFilter === '网络图片' || currentFilter === 'remote') && isRemote);
+				const isRemote = data.path.startsWith('http://') || data.path.startsWith('https://');
+				const matchesFilter = this.checkFilterMatch(currentFilter, isRemote);
 
 				if (!matchesFilter) {
-					setCssProps(data.element, { display: 'none' });
+					setCssProps(data.element, {display: 'none'});
 					return;
 				}
 
-				// 符合筛选条件的图片一定要显示（设置display为空）
-				setCssProps(data.element, { display: '' });
+				setCssProps(data.element, {display: ''});
 
-				// 检查是否在可视区域内
-				const isVisible = data.position.bottom >= viewportTop &&
-					data.position.top <= viewportBottom;
+				const isVisible = data.position.bottom >= viewportTop && data.position.top <= viewportBottom;
 
 				if (isVisible) {
-					// 在可视区域内且符合筛选条件
 					if (!data.isLoading && !data.objectUrl && !data.hasError) {
 						this.queueImageLoad(data.path, true);
 					}
-					setCssProps(data.element, { visibility: '' }); // 显示元素
-
-					const images = Array.from(data.element.querySelectorAll('img'));
-					images.forEach(imgEl => {
-						const currentOpacity = window.getComputedStyle(imgEl).opacity;
-						if (imgEl.complete && imgEl.naturalWidth > 0 && currentOpacity !== '1') {
-							log.debug(() => `修复未显示的图片: ${data.path}`);
-							setCssProps(imgEl, { opacity: '1' });
-							imgEl.setAttribute('complete', 'true');
-							imgEl.classList.add('loaded');
-						}
-					});
+					setCssProps(data.element, {visibility: ''});
+					this.ensureImageVisible(data);
 				} else {
-					// 不在可视区域内但符合筛选条件
-					// 设置为隐藏但保留在DOM中
-					setCssProps(data.element, { visibility: 'hidden' });
-
-					// 对不可见的图片，也添加到加载队列，但优先级较低
+					setCssProps(data.element, {visibility: 'hidden'});
 					if (!data.isLoading && !data.objectUrl && !data.hasError) {
-						this.queueImageLoad(data.path, false); // false 表示不在可视区域内
+						this.queueImageLoad(data.path, false);
 					}
 				}
 			});
-
-			window.requestAnimationFrame(() => {
-				this.imageDataMap.forEach((data) => {
-					if (!data.position) return;
-
-					// 再次检查是否在可视区域内
-					const isNowVisible = data.position.bottom >= viewportTop &&
-						data.position.top <= viewportBottom;
-
-					if (isNowVisible && window.getComputedStyle(data.element).display !== 'none') {
-						// 确保元素可见
-						setCssProps(data.element, { visibility: '' });
-
-						// 确保图片加载并显示
-						const images = Array.from(data.element.querySelectorAll('img'));
-						images.forEach(imgEl => {
-							if (imgEl.complete && imgEl.naturalWidth > 0 &&
-								(window.getComputedStyle(imgEl).opacity !== '1' || !imgEl.classList.contains('loaded'))) {
-								log.debug(() => `在动画帧中修复未显示的图片: ${data.path}`);
-								setCssProps(imgEl, { opacity: '1' });
-								imgEl.classList.add('loaded');
-							}
-						});
-					}
-				});
-			});
 		};
 
-		// 使用ResizeObserver监听容器和图片大小变化
 		const resizeObserver = new ResizeObserver(() => {
 			boundUpdateElementPositions();
 			scrollHandler();
 		});
 		resizeObserver.observe(container);
 
-		// 监听图片加载完成，动态更新布局
 		const imageLoadHandler = () => {
 			setTimeout(() => {
 				boundUpdateElementPositions();
@@ -429,7 +374,6 @@ export class CurrentNoteImageGalleryService extends Modal {
 		container.addEventListener('scroll', scrollHandler);
 		window.addEventListener('resize', boundUpdateElementPositions);
 
-		// 为所有图片添加load事件监听
 		this.imageDataMap.forEach((data) => {
 			const img = data.element.querySelector('img');
 			if (img) {
@@ -442,6 +386,24 @@ export class CurrentNoteImageGalleryService extends Modal {
 			container.removeEventListener('scroll', scrollHandler);
 			window.removeEventListener('resize', boundUpdateElementPositions);
 		};
+	}
+
+	private checkFilterMatch(filter: string, isRemote: boolean): boolean {
+		return filter === '全部' || filter === 'all' ||
+			((filter === '本地图片' || filter === 'local') && !isRemote) ||
+			((filter === '网络图片' || filter === 'remote') && isRemote);
+	}
+
+	private ensureImageVisible(data: ImageData): void {
+		const images = Array.from(data.element.querySelectorAll('img'));
+		images.forEach(imgEl => {
+			const currentOpacity = window.getComputedStyle(imgEl).opacity;
+			if (imgEl.complete && imgEl.naturalWidth > 0 && currentOpacity !== '1') {
+				setCssProps(imgEl, {opacity: '1'});
+				imgEl.setAttribute('complete', 'true');
+				imgEl.classList.add('loaded');
+			}
+		});
 	}
 
 	private sortImages(sortType: string) {
@@ -598,6 +560,65 @@ export class CurrentNoteImageGalleryService extends Modal {
 			if (img) {
 				this.createContextMenu(e, img);
 			}
+		});
+	}
+
+	/**
+	 * 分批渲染图片元素，避免阻塞主线程
+	 */
+	private async renderImagesInBatches(imageWall: HTMLElement): Promise<void> {
+		const BATCH_SIZE = 50;
+		const fragment = document.createDocumentFragment();
+
+		for (let i = 0; i < this.images.length; i++) {
+			if (this.isClosed) return;
+
+			const imagePath = this.images[i];
+			const imageDiv = document.createElement('div');
+			imageDiv.className = 'image-item';
+			imageDiv.setAttribute('data-path', imagePath);
+
+			// 存储图片元素引用
+			this.imageDataMap.set(imagePath, {
+				path: imagePath,
+				element: imageDiv,
+				isLoading: false,
+				hasError: false
+			});
+
+			// 添加点击事件
+			imageDiv.addEventListener('click', (e) => {
+				e.stopPropagation();
+				e.preventDefault();
+				const currentIndex = this.images.indexOf(imagePath);
+				this.createLightboxWithNavigation(currentIndex);
+			});
+
+			imageDiv.addEventListener('contextmenu', (e) => {
+				e.preventDefault();
+				const img = imageDiv.querySelector('img') as HTMLImageElement | null;
+				if (img) {
+					this.createContextMenu(e, img);
+				}
+			});
+
+			fragment.appendChild(imageDiv);
+
+			// 每批次渲染后让出主线程
+			if ((i + 1) % BATCH_SIZE === 0) {
+				imageWall.appendChild(fragment);
+				await new Promise(resolve => setTimeout(resolve, 0));
+			}
+		}
+
+		// 添加剩余元素
+		if (fragment.childNodes.length > 0) {
+			imageWall.appendChild(fragment);
+		}
+
+		// 渲染完成后设置懒加载观察
+		this.imageDataMap.forEach((data) => {
+			this.intersectionObserver?.observe(data.element);
 		});
 	}
 
@@ -901,9 +922,23 @@ export class CurrentNoteImageGalleryService extends Modal {
 			resolve();
 		};
 
-		img.onerror = (e) => {
+		img.onerror = async (e) => {
 			const errorMsg = e instanceof Error ? e.message : String(e);
 			log.error(() => `图片直接加载失败: ${imagePath}, 错误: ${errorMsg}`);
+
+			// 尝试从缓存降级加载
+			if (this.plugin.settings.enableCache) {
+				try {
+					const cached = await this.plugin.imageCacheService.getCachedImage(imagePath);
+					if (cached && !this.isClosed) {
+						log.debug(() => `从缓存降级加载: ${imagePath}`);
+						img.src = cached.data;
+						return;
+					}
+				} catch (cacheError) {
+					log.debug(() => `缓存降级失败: ${imagePath}`);
+				}
+			}
 
 			// 对于本地图片尝试替代路径
 			if (!imagePath.startsWith('http://') && !imagePath.startsWith('https://')) {
@@ -1137,6 +1172,8 @@ export class CurrentNoteImageGalleryService extends Modal {
 		loadingText: HTMLElement,
 		isWeiboImage = false
 	): Promise<void> {
+		if (this.isClosed) return;
+
 		const imageData = this.imageDataMap.get(imagePath);
 		if (!imageData) {
 			throw new Error('Image data not found');
@@ -1153,12 +1190,15 @@ export class CurrentNoteImageGalleryService extends Modal {
 					// 异步获取缓存
 					const cachedImage = await this.plugin.imageCacheService.getCachedImage(imagePath);
 
+					if (this.isClosed) return;
+
 					if (cachedImage) {
 						log.info(() => `✓ 缓存命中，从缓存加载: ${imagePath}`);
 						loadingText.setText(t('loadingFromCache'));
 
 						await new Promise<void>((resolve, reject) => {
 							img.onload = () => {
+								if (this.isClosed) return;
 								log.info(() => `✓ 缓存图片加载成功: ${imagePath}`);
 								this.handleImageLoadSuccess(img, imageDiv, loadingText, imagePath);
 								resolve();
@@ -1173,6 +1213,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 							// 设置图片源为缓存的base64数据
 							img.src = cachedImage.data;
 						}).catch(async () => {
+							if (this.isClosed) return;
 							// 缓存加载失败，尝试网络加载
 							await this.tryNetworkImageLoading(imagePath, img, imageDiv, loadingText, () => {}, () => {}, isWeiboImage);
 						});
@@ -1187,6 +1228,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 				log.error(() => `获取缓存出错: ${imagePath}`, error);
 			}
 
+			if (this.isClosed) return;
 			// 缓存未命中或禁用，尝试网络加载
 			await this.tryNetworkImageLoading(imagePath, img, imageDiv, loadingText, () => {}, () => {}, isWeiboImage);
 		} else {
@@ -1518,24 +1560,31 @@ export class CurrentNoteImageGalleryService extends Modal {
 		try {
 			// 如果是直接文件格式，不是Wiki链接
 			if (!link.includes('[[') && !link.includes(']]')) {
+				// 移除锚点和别名
+				const cleanLink = link.split('|')[0].split('#')[0].trim();
+				
 				// 尝试作为直接文件路径
-				const directFile = this.app.vault.getAbstractFileByPath(link);
+				const directFile = this.app.vault.getAbstractFileByPath(cleanLink);
 				if (directFile instanceof TFile) {
-					log.debug(() => `找到直接文件路径: ${link}`);
+					log.debug(() => `找到直接文件路径: ${cleanLink}`);
 					return directFile.path;
 				}
 
+				// 获取当前文件上下文
+				const activeFile = this.app.workspace.getActiveFile();
+				const sourcePath = activeFile?.path || '';
+
 				// 尝试解析为链接路径
-				const dest = this.app.metadataCache.getFirstLinkpathDest(link, '');
+				const dest = this.app.metadataCache.getFirstLinkpathDest(cleanLink, sourcePath);
 				if (dest instanceof TFile) {
 					log.debug(() => `解析为链接路径: ${dest.path}`);
 					return dest.path;
 				}
 
 				// 如果是文件名（没有路径），尝试在库中查找
-				if (!link.includes('/')) {
+				if (!cleanLink.includes('/')) {
 					const allFiles = this.app.vault.getFiles();
-					const matchedFiles = allFiles.filter(f => f.name === link);
+					const matchedFiles = allFiles.filter(f => f.name === cleanLink);
 					if (matchedFiles.length > 0) {
 						log.debug(() => `通过文件名找到: ${matchedFiles[0].path}`);
 						return matchedFiles[0].path;
@@ -1543,8 +1592,8 @@ export class CurrentNoteImageGalleryService extends Modal {
 				}
 
 				// 如果都失败了，尝试添加_resources前缀
-				if (!link.startsWith('_resources/')) {
-					const resourcePath = `_resources/${link}`;
+				if (!cleanLink.startsWith('_resources/')) {
+					const resourcePath = `_resources/${cleanLink}`;
 					const resourceFile = this.app.vault.getAbstractFileByPath(resourcePath);
 					if (resourceFile instanceof TFile) {
 						log.debug(() => `找到资源文件: ${resourcePath}`);
@@ -1552,14 +1601,19 @@ export class CurrentNoteImageGalleryService extends Modal {
 					}
 				}
 
-				return link;
+				return cleanLink;
 			}
 
 			// 处理Wiki链接格式 ![[图片]]
 			const stripped = link.replace(/!?\[\[(.*?)]]/, '$1');
-			const path = stripped.split('|')[0].trim();
+			// 移除锚点和别名
+			const path = stripped.split('|')[0].split('#')[0].trim();
 
-			const file = this.app.metadataCache.getFirstLinkpathDest(path, '');
+			// 获取当前文件上下文
+			const activeFile = this.app.workspace.getActiveFile();
+			const sourcePath = activeFile?.path || '';
+
+			const file = this.app.metadataCache.getFirstLinkpathDest(path, sourcePath);
 			if (file instanceof TFile) {
 				log.debug(() => `Wiki链接解析为: ${file.path}`);
 				return file.path;
@@ -1991,6 +2045,8 @@ export class CurrentNoteImageGalleryService extends Modal {
 	}
 
 	onClose() {
+		this.isClosed = true;
+
 		this.currentRequests.forEach((request) => {
 			try {
 				if (request.controller) {
@@ -2020,6 +2076,12 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 		// 清理虚拟滚动相关事件监听器
 		this.cleanupVirtualScroll();
+
+		// 清理排序防抖定时器
+		if (this.sortDebounceTimer !== null) {
+			clearTimeout(this.sortDebounceTimer);
+			this.sortDebounceTimer = null;
+		}
 
 		// 重置状态
 		this.loadedImages = 0;
