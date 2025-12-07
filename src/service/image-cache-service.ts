@@ -27,7 +27,7 @@ export class ImageCacheService {
 	private shouldUseCacheCallback: (() => boolean) | null = null;
 	private _isSaving = false;
 	private totalCacheSize = 0;
-	private debounceSaveTimeout: NodeJS.Timeout | null = null;
+	private debounceSaveTimeout: number | null = null;
 
 	private get cacheDir(): string {
 		return `${this.app.vault.configDir}/plugins/note-image-gallery/cache`;
@@ -70,7 +70,7 @@ export class ImageCacheService {
 			log.debug(() => `缓存目录已确认: ${this.cacheDir}`);
 			return true;
 		} catch (error) {
-			log.error(() => `确保缓存目录存在时出错:`, error);
+			log.error(() => `确保缓存目录存在时出错:`, error instanceof Error ? error : undefined);
 			throw error; // 重新抛出错误以便调用者知道操作失败
 		}
 	}
@@ -82,7 +82,7 @@ export class ImageCacheService {
 			await this.cleanupOrphanedFiles();
 			log.debug(() => `缓存服务初始化完成，总大小: ${Math.round(this.totalCacheSize / 1024 / 1024)}MB`);
 		} catch (error) {
-			log.error(() => `缓存服务初始化失败:`, error);
+			log.error(() => `缓存服务初始化失败:`, error instanceof Error ? error : undefined);
 			// 确保基本的缓存功能可用
 			this.cacheIndex = {};
 			this.totalCacheSize = 0;
@@ -101,7 +101,7 @@ export class ImageCacheService {
 		if (exists) {
 			try {
 				const content = await adapter.read(this.indexFile);
-				this.cacheIndex = JSON.parse(content);
+				this.cacheIndex = JSON.parse(content) as CacheIndex;
 
 				// 计算总缓存大小
 				this.totalCacheSize = 0;
@@ -117,7 +117,7 @@ export class ImageCacheService {
 				// 加载后清理过期缓存
 				await this.cleanCache();
 			} catch (e) {
-				log.error(() => `加载缓存索引失败:`, e);
+				log.error(() => `加载缓存索引失败:`, e instanceof Error ? e : undefined);
 				this.cacheIndex = {};
 				this.totalCacheSize = 0;
 			}
@@ -189,7 +189,7 @@ export class ImageCacheService {
 				break;
 			} catch (e) {
 				retries++;
-				log.error(() => `保存缓存索引失败 (尝试 ${retries}/${maxRetries}):`, e);
+				log.error(() => `保存缓存索引失败 (尝试 ${retries}/${maxRetries}):`, e instanceof Error ? e : undefined);
 
 				if (retries >= maxRetries) {
 					log.error(() => `达到最大重试次数，无法保存缓存索引`);
@@ -276,7 +276,7 @@ export class ImageCacheService {
 
 			log.debug(() => `成功缓存图片: ${url}, 总缓存大小: ${Math.round(this.totalCacheSize / 1024 / 1024)}MB`);
 		} catch (error) {
-			log.error(() => `缓存图片 ${url} 失败:`, error);
+			log.error(() => `缓存图片 ${url} 失败:`, error instanceof Error ? error : undefined);
 		}
 
 		return base64Data;
@@ -339,7 +339,7 @@ export class ImageCacheService {
 				etag: cacheEntry.etag
 			};
 		} catch (e) {
-			log.error(() => `读取缓存图片 ${url} 失败:`, e);
+			log.error(() => `读取缓存图片 ${url} 失败:`, e instanceof Error ? e : undefined);
 			await this.removeCacheEntry(url);
 			return null;
 		}
@@ -351,9 +351,9 @@ export class ImageCacheService {
 			clearTimeout(this.debounceSaveTimeout);
 		}
 
-		this.debounceSaveTimeout = setTimeout(() => {
-			this.saveCacheIndex().catch(e => {
-				log.error(() => `延迟保存缓存索引失败:`, e);
+		this.debounceSaveTimeout = window.setTimeout(() => {
+			this.saveCacheIndex().catch((e: unknown) => {
+				log.error(() => `延迟保存缓存索引失败:`, e instanceof Error ? e : undefined);
 			});
 			this.debounceSaveTimeout = null;
 		}, delay);
@@ -470,7 +470,7 @@ export class ImageCacheService {
 			// 从索引中删除
 			delete this.cacheIndex[url];
 		} catch (e) {
-			log.error(() => `移除缓存项 ${url} 失败:`, e);
+			log.error(() => `移除缓存项 ${url} 失败:`, e instanceof Error ? e : undefined);
 		}
 	}
 
@@ -552,7 +552,7 @@ export class ImageCacheService {
 				}
 			}
 		} catch (e) {
-			log.error(() => `Error extracting file extension:`, e);
+			log.error(() => `Error extracting file extension:`, e instanceof Error ? e : undefined);
 		}
 		return '';
 	}
@@ -665,7 +665,7 @@ export class ImageCacheService {
 
 			log.debug(() => `所有缓存已清除`);
 		} catch (e) {
-			log.error(() => `清除所有缓存失败:`, e);
+			log.error(() => `清除所有缓存失败:`, e instanceof Error ? e : undefined);
 		}
 	}
 
@@ -704,7 +704,7 @@ export class ImageCacheService {
 					await adapter.remove(filePath);
 					log.debug(() => `已删除孤立的缓存文件: ${filename}`);
 				} catch (e) {
-					log.error(() => `删除孤立的缓存文件失败: ${filename}`, e);
+					log.error(() => `删除孤立的缓存文件失败: ${filename}`, e instanceof Error ? e : undefined);
 				}
 			}
 
@@ -712,7 +712,7 @@ export class ImageCacheService {
 				log.debug(() => `共删除了 ${orphanedFiles.length} 个孤立的缓存文件`);
 			}
 		} catch (e) {
-			log.error(() => `清理孤立文件失败:`, e);
+			log.error(() => `清理孤立文件失败:`, e instanceof Error ? e : undefined);
 		}
 	}
 
@@ -740,7 +740,7 @@ export class ImageCacheService {
 
 			return cacheFiles.map(file => file.name);
 		} catch (e) {
-			log.error(() => `列出缓存目录文件失败:`, e);
+			log.error(() => `列出缓存目录文件失败:`, e instanceof Error ? e : undefined);
 			return [];
 		}
 	}

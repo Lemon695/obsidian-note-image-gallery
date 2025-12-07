@@ -79,7 +79,7 @@ export class NoteImageGallerySettingTab extends PluginSettingTab {
 				log.debug(() => t('cacheSizeZeroOrInvalid'));
 			}
 		} catch (e) {
-			log.error(() => t('getCacheSizeFailed'),e);
+			log.error(() => t('getCacheSizeFailed'), e instanceof Error ? e : undefined);
 			new Notice(t('unableToGetCacheSize'));
 		}
 

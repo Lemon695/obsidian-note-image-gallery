@@ -5,7 +5,7 @@ import globals from "globals";
 export default tseslint.config(
 	// 忽略构建产物和依赖
 	{
-		ignores: ["node_modules/**", "dist/**", "build/**", "main.js"],
+		ignores: ["node_modules/**", "dist/**", "build/**", "main.js", "version-bump.mjs"],
 	},
 
 	{

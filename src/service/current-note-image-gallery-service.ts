@@ -212,16 +212,16 @@ export class CurrentNoteImageGalleryService extends Modal {
 						try {
 							await this.retryHandler.execute(
 								async () => {
-									const imgEl = imageData.element.querySelector('img') as HTMLImageElement || imageData.element.createEl('img');
-									const loadingTextEl = (imageData.element.querySelector('.loading-text') ||
-										imageData.element.createDiv('loading-text')) as HTMLElement;
+									const imgEl = imageData.element.querySelector('img') || imageData.element.createEl('img');
+									const loadingTextEl = imageData.element.querySelector('.loading-text') ||
+										imageData.element.createDiv('loading-text');
 									loadingTextEl.setText(t('loading'));
 
-									await this.loadImageUnified(path, imgEl, imageData.element, loadingTextEl, isWeiboImage);
+									await this.loadImageUnified(path, imgEl, imageData.element, loadingTextEl as HTMLElement, isWeiboImage);
 								},
 								`加载图片 ${path}`
 							);
-						} catch (error) {
+						} catch {
 							imageData.hasError = true;
 							this.handleImageError(imageData.element, t('loadingFailed'));
 							this.loadedImages++;
@@ -421,7 +421,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 		if (sortType === 'size-desc' || sortType === 'size-asc') {
 			// 过滤出已加载的图片（只要naturalWidth > 0就认为已加载，不依赖complete属性）
 			const loadedItems = items.filter(item => {
-				const img = item.querySelector('img') as HTMLImageElement | null;
+				const img = item.querySelector('img');
 				const imagePath = item.getAttribute('data-path');
 				// 关键修改：只检查naturalWidth，不检查complete
 				const isLoaded = img && img.naturalWidth > 0;
@@ -435,7 +435,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 			// 未加载的图片
 			const unloadedItems = items.filter(item => {
-				const img = item.querySelector('img') as HTMLImageElement | null;
+				const img = item.querySelector('img');
 				return !img || img.naturalWidth === 0;
 			});
 
@@ -474,7 +474,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 	}
 
 	private getImageSize(element: Element): number {
-		const img = element.querySelector('img') as HTMLImageElement | null;
+		const img = element.querySelector('img');
 		if (!img) return 0;
 
 		const width = img.naturalWidth || 0;
@@ -556,7 +556,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 		imageDiv.addEventListener('contextmenu', (e) => {
 			e.preventDefault();
-			const img = imageDiv.querySelector('img') as HTMLImageElement | null;
+			const img = imageDiv.querySelector('img');
 			if (img) {
 				this.createContextMenu(e, img);
 			}
@@ -596,7 +596,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 			imageDiv.addEventListener('contextmenu', (e) => {
 				e.preventDefault();
-				const img = imageDiv.querySelector('img') as HTMLImageElement | null;
+				const img = imageDiv.querySelector('img');
 				if (img) {
 					this.createContextMenu(e, img);
 				}
@@ -669,9 +669,10 @@ export class CurrentNoteImageGalleryService extends Modal {
 						imageData.isLoading = false;
 					}
 
-					reject(e);
+					const error = e instanceof Error ? e : new Error('Image load failed');
+					reject(error);
 				} catch (error) {
-					log.error(() => `处理替代路径时出错:`, error);
+					log.error(() => `处理替代路径时出错:`, error instanceof Error ? error : undefined);
 
 					// 显示错误
 					this.handleImageError(imageDiv, t('processingFailed'));
@@ -684,7 +685,8 @@ export class CurrentNoteImageGalleryService extends Modal {
 						imageData.isLoading = false;
 					}
 
-					reject(error);
+					const err = error instanceof Error ? error : new Error('Image load failed');
+					reject(err);
 				}
 			};
 
@@ -695,8 +697,8 @@ export class CurrentNoteImageGalleryService extends Modal {
 						img.src = this.plugin.imageLoader.getResourcePath(imagePath);
 					}
 				})
-				.catch(error => {
-					log.error(() => `加载器加载失败，回退到标准方法: ${imagePath}`, error);
+				.catch((error: unknown) => {
+					log.error(() => `加载器加载失败，回退到标准方法: ${imagePath}`, error instanceof Error ? error : undefined);
 					img.src = this.plugin.imageLoader.getResourcePath(imagePath);
 				});
 		});
@@ -744,7 +746,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 				resolve();
 			}
 		} catch (error) {
-			log.error(() => `高级加载尝试失败: ${imagePath}`, error);
+			log.error(() => `高级加载尝试失败: ${imagePath}`, error instanceof Error ? error : undefined);
 
 			// 最后的回退方案 - 直接设置URL
 			if (isNetworkImage) {
@@ -820,13 +822,13 @@ export class CurrentNoteImageGalleryService extends Modal {
 					);
 					log.info(() => `✓ 网络图片缓存成功: ${imagePath}`);
 				} catch (cacheError) {
-					log.error(() => `✗ 网络图片缓存失败: ${imagePath}`, cacheError);
+					log.error(() => `✗ 网络图片缓存失败: ${imagePath}`, cacheError instanceof Error ? cacheError : undefined);
 				}
 			} catch (error) {
-				log.error(() => '缓存图片过程中出错:', error);
+				log.error(() => '缓存图片过程中出错:', error instanceof Error ? error : undefined);
 			}
 		} catch (error) {
-			log.error(() => `自定义fetch加载失败: ${imagePath}`, error);
+			log.error(() => `自定义fetch加载失败: ${imagePath}`, error instanceof Error ? error : undefined);
 			// 直接进入简单加载模式
 			this.loadImageDirectly(imagePath, img, imageDiv, loadingText, resolve, reject, isWeiboImage);
 		}
@@ -907,7 +909,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 			} catch (error) {
 				// 只记录非SecurityError的错误
 				if (!(error instanceof DOMException && error.name === 'SecurityError')) {
-					log.error(() => `设置图片缓存时出错: ${imagePath}`, error);
+					log.error(() => `设置图片缓存时出错: ${imagePath}`, error instanceof Error ? error : undefined);
 				}
 			}
 		};
@@ -923,8 +925,8 @@ export class CurrentNoteImageGalleryService extends Modal {
 		};
 
 		img.onerror = async (e) => {
-			const errorMsg = e instanceof Error ? e.message : String(e);
-			log.error(() => `图片直接加载失败: ${imagePath}, 错误: ${errorMsg}`);
+			const err = e instanceof Error ? e : new Error(`图片直接加载失败: ${imagePath}`);
+			log.error(() => `图片直接加载失败: ${imagePath}`, err);
 
 			// 尝试从缓存降级加载
 			if (this.plugin.settings.enableCache) {
@@ -935,7 +937,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 						img.src = cached.data;
 						return;
 					}
-				} catch (cacheError) {
+				} catch {
 					log.debug(() => `缓存降级失败: ${imagePath}`);
 				}
 			}
@@ -953,7 +955,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 			this.handleImageError(imageDiv, '加载失败');
 			this.loadedImages++;
 			this.updateProgressBar();
-			reject(e);
+			reject(err);
 		};
 
 		// 如果是微博图片，尝试使用 Obsidian 的 requestUrl API
@@ -995,14 +997,14 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 							log.debug(() => `成功缓存微博图片: ${imagePath}`);
 						} catch (cacheError) {
-							log.error(() => `缓存微博图片失败: ${imagePath}`, cacheError);
+							log.error(() => `缓存微博图片失败: ${imagePath}`, cacheError instanceof Error ? cacheError : undefined);
 						}
 					} catch (error) {
-						log.error(() => '处理 requestUrl 响应失败:', error);
+						log.error(() => '处理 requestUrl 响应失败:', error instanceof Error ? error : undefined);
 						img.src = imagePath; // 失败时尝试直接设置
 					}
 				}).catch((error: Error | undefined) => {
-					log.error(() => `requestUrl 加载微博图片失败: ${imagePath}`, error);
+					log.error(() => `requestUrl 加载微博图片失败: ${imagePath}`, error instanceof Error ? error : undefined);
 					img.src = imagePath; // 失败时尝试直接设置
 				});
 
@@ -1032,7 +1034,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 					}
 				}
 			} catch (error) {
-				log.error(() => `解析本地图片路径失败: ${imagePath}`, error);
+				log.error(() => `解析本地图片路径失败: ${imagePath}`, error instanceof Error ? error : undefined);
 				this.handleImageError(imageDiv, '找不到图片');
 				this.loadedImages++;
 				this.updateProgressBar();
@@ -1083,7 +1085,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 			return this.getResourcePath(originalPath);
 		} catch (error) {
-			log.error(() => '尝试替代路径失败:', error);
+			log.error(() => '尝试替代路径失败:', error instanceof Error ? error : undefined);
 			return null;
 		}
 	}
@@ -1205,9 +1207,9 @@ export class CurrentNoteImageGalleryService extends Modal {
 							};
 
 							img.onerror = (e) => {
-								const errorMsg = e instanceof Error ? e.message : String(e);
-								log.error(() => `✗ 缓存图片加载失败: ${imagePath}, 错误: ${errorMsg}`);
-								reject(e);
+								const error = e instanceof Error ? e : new Error(`缓存图片加载失败: ${imagePath}`);
+								log.error(() => `✗ 缓存图片加载失败: ${imagePath}`, error);
+								reject(error);
 							};
 
 							// 设置图片源为缓存的base64数据
@@ -1225,7 +1227,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 					log.debug(() => `图片缓存已禁用`);
 				}
 			} catch (error) {
-				log.error(() => `获取缓存出错: ${imagePath}`, error);
+				log.error(() => `获取缓存出错: ${imagePath}`, error instanceof Error ? error : undefined);
 			}
 
 			if (this.isClosed) return;
@@ -1333,14 +1335,14 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 							log.info(() => `✓ 成功缓存直接加载的图片: ${imagePath}`);
 						} catch (error) {
-							log.error(() => `缓存直接加载的图片失败: ${imagePath}`, error);
+							log.error(() => `缓存直接加载的图片失败: ${imagePath}`, error instanceof Error ? error : undefined);
 						}
 						blobResolve();
 					})();
 				}, 'image/jpeg', 0.9);
 			});
 		} catch (error) {
-			log.error(() => `缓存图片过程中出错: ${imagePath}`, error);
+			log.error(() => `缓存图片过程中出错: ${imagePath}`, error instanceof Error ? error : undefined);
 		}
 	}
 
@@ -1365,9 +1367,9 @@ export class CurrentNoteImageGalleryService extends Modal {
 					};
 
 					img.onerror = (e) => {
-						const errorMsg = e instanceof Error ? e.message : String(e);
-						log.error(() => `Cached Weibo image load error: ${errorMsg}`);
-						reject(e);
+						const error = e instanceof Error ? e : new Error('Cached Weibo image load error');
+						log.error(() => `Cached Weibo image load error`, error);
+						reject(error);
 					};
 
 					// 设置图片源为缓存的base64数据
@@ -1381,7 +1383,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 			await this.loadWeiboImageWithoutCache(imagePath, img, imageDiv, loadingText, retryCount, () => {}, () => {});
 		} catch (error) {
 			const currentRequestId = imageDiv.getAttribute('data-request-id');
-			this.handleError(error, imageDiv, currentRequestId || undefined, retryCount);
+			this.handleError(error instanceof Error ? error : new Error(String(error)), imageDiv, currentRequestId || undefined, retryCount);
 			throw error;
 		}
 	}
@@ -1479,10 +1481,10 @@ export class CurrentNoteImageGalleryService extends Modal {
 				);
 				log.debug(() => `成功缓存微博图片: ${imagePath}`);
 			} catch (cacheError) {
-				log.error(() => `缓存微博图片失败: ${imagePath}`, cacheError);
+				log.error(() => `缓存微博图片失败: ${imagePath}`, cacheError instanceof Error ? cacheError : undefined);
 			}
 		} catch (error) {
-			log.error(() => `requestUrl 加载微博图片失败: ${imagePath}`, error);
+			log.error(() => `requestUrl 加载微博图片失败: ${imagePath}`, error instanceof Error ? error : undefined);
 
 			const imageData = this.imageDataMap.get(imagePath);
 			if (imageData) {
@@ -1508,7 +1510,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 	private handleError(error: Error, imageDiv: HTMLElement, requestId: string | undefined, retryCount: number) {
 		const MAX_RETRIES = 3;
 
-		log.error(() => 'Error loading Weibo image:', error);
+		log.error(() => 'Error loading Weibo image:', error instanceof Error ? error : undefined);
 		if (requestId) {
 			this.currentRequests.delete(requestId);
 		}
@@ -1516,11 +1518,11 @@ export class CurrentNoteImageGalleryService extends Modal {
 		if (retryCount < MAX_RETRIES) {
 			log.debug(() => `Retrying after error (${retryCount + 1}/${MAX_RETRIES})`);
 			setTimeout(() => {
-				const img = imageDiv.querySelector('img') as HTMLImageElement | null;
-				const loadingText = imageDiv.querySelector('.loading-text') as HTMLElement | null;
+				const img = imageDiv.querySelector('img');
+				const loadingText = imageDiv.querySelector('.loading-text');
 				if (img && loadingText) {
 					const imgSrc = img.src;
-					void this.loadWeiboImage(imgSrc, img, imageDiv, loadingText, retryCount + 1);
+					void this.loadWeiboImage(imgSrc, img, imageDiv, loadingText as HTMLElement, retryCount + 1);
 				}
 			}, 1000 * (retryCount + 1));
 		} else {
@@ -1621,7 +1623,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 			return path;
 		} catch (error) {
-			log.error(() => 'Error getting link path:', error);
+			log.error(() => 'Error getting link path:', error instanceof Error ? error : undefined);
 			return null;
 		}
 	}
@@ -1660,7 +1662,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 					}, 'image/png');
 				});
 				await this.writeToClipboard(blob);
-			} catch (e) {
+			} catch {
 				const blob = await new Promise<Blob>((resolve, reject) => {
 					canvas.toBlob((b) => {
 						if (b) {
@@ -1675,7 +1677,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 			new Notice(t('imageCopied'));
 		} catch (err) {
-			log.error(() => 'Copy failed:', err);
+			log.error(() => 'Copy failed:', err instanceof Error ? err : undefined);
 			new Notice(t('copyFailed'));
 		}
 	}
@@ -1687,7 +1689,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 					[blob.type]: blob
 				})
 			]);
-		} catch (e) {
+		} catch {
 			const data = new DataTransfer();
 			data.items.add(new File([blob], 'image.png', {type: blob.type}));
 			const event = new ClipboardEvent('copy', {
@@ -1722,7 +1724,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 			new Notice(t('downloadingImage'));
 		} catch (error) {
-			log.error(() => '下载失败:', error);
+			log.error(() => '下载失败:', error instanceof Error ? error : undefined);
 			new Notice(t('downloadFailed'));
 		}
 	}
@@ -1885,7 +1887,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 						}
 					}
 				} catch (error) {
-					log.error(() => `Lightbox: 加载网络图片失败 ${imagePath}`, error);
+					log.error(() => `Lightbox: 加载网络图片失败 ${imagePath}`, error instanceof Error ? error : undefined);
 					// 失败时尝试直接加载
 					img.crossOrigin = 'anonymous';
 					img.src = imagePath;
@@ -2061,7 +2063,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 					request.electronRequest.abort();
 				}
 			} catch (e) {
-				log.error(() => '中止请求时出错:', e);
+				log.error(() => '中止请求时出错:', e instanceof Error ? e : undefined);
 			}
 		});
 		this.currentRequests.clear();

@@ -53,7 +53,7 @@ export class ObsidianImageLoader {
 
 			return false;
 		} catch (error) {
-			log.error(() => `通过Obsidian API加载本地图片失败: ${imagePath}`, error);
+			log.error(() => `通过Obsidian API加载本地图片失败: ${imagePath}`, error instanceof Error ? error : undefined);
 			return false;
 		}
 	}
@@ -103,7 +103,7 @@ export class ObsidianImageLoader {
 
 			return [...new Set(result)];
 		} catch (error) {
-			log.error(() => `生成替代路径时出错:`, error);
+			log.error(() => `生成替代路径时出错:`, error instanceof Error ? error : undefined);
 			return [originalPath]; // 出错时返回原始路径
 		}
 	}
@@ -167,12 +167,12 @@ export class ObsidianImageLoader {
 					contentType
 				);
 			} catch (error) {
-				log.error(() => `缓存图片失败: ${imageUrl}`, error);
+				log.error(() => `缓存图片失败: ${imageUrl}`, error instanceof Error ? error : undefined);
 			}
 
 			return true;
 		} catch (error) {
-			log.error(() => `通过Obsidian API加载网络图片失败: ${imageUrl}`, error);
+			log.error(() => `通过Obsidian API加载网络图片失败: ${imageUrl}`, error instanceof Error ? error : undefined);
 			return false;
 		}
 	}

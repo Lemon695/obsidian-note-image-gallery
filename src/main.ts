@@ -5,7 +5,7 @@ import {ImageCacheService} from './service/image-cache-service';
 import {ImageExtractorService} from "./service/image-extractor-service";
 import {log} from './utils/log-utils';
 import {ObsidianImageLoader} from "./service/obsidian-image-loader";
-import {t, debugLocale} from './i18n/locale';
+import {t} from './i18n/locale';
 
 export default class NoteImageGalleryPlugin extends Plugin {
 
@@ -16,10 +16,7 @@ export default class NoteImageGalleryPlugin extends Plugin {
 	public settings: Settings;
 
 	async onload() {
-		console.log(t('loadingPlugin') + this.manifest.version);
-
-		// 调试语言设置
-		//debugLocale();
+		log.info(() => t('loadingPlugin') + this.manifest.version);
 
 		await this.loadSettings();
 
@@ -67,7 +64,7 @@ export default class NoteImageGalleryPlugin extends Plugin {
 	}
 
 	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData()) as Settings;
 	}
 
 	async saveSettings() {
@@ -86,7 +83,7 @@ export default class NoteImageGalleryPlugin extends Plugin {
 			this.currentNoteImageGalleryService = new CurrentNoteImageGalleryService(this.app, this, images);
 			this.currentNoteImageGalleryService.open();
 		} catch (error) {
-			log.error(() => 'Error opening image gallery modal:', error);
+			log.error(() => 'Error opening image gallery modal:', error instanceof Error ? error : undefined);
 			new Notice(t('errorOpeningGallery'));
 		}
 	}
@@ -113,8 +110,8 @@ export default class NoteImageGalleryPlugin extends Plugin {
 			this.imageCacheService.cleanup();
 			void this.imageCacheService.saveCacheIndex().then(() => {
 				log.debug(() => t('cacheIndexSaved'));
-			}).catch((e) => {
-				log.error(() => t('saveCacheIndexFailed'), e);
+			}).catch((e: unknown) => {
+				log.error(() => t('saveCacheIndexFailed'), e instanceof Error ? e : undefined);
 			});
 		}
 

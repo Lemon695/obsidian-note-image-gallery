@@ -166,10 +166,10 @@ export function t(key: keyof typeof translations["en-GB"], params?: Record<strin
  * 调试函数：打印当前语言设置
  */
 export function debugLocale(): void {
-	console.log('=== Locale Debug Info ===');
-	console.log('Current locale:', getLocale());
-	console.log('localStorage language:', window.localStorage.getItem('language'));
-	console.log('navigator.language:', navigator.language);
-	console.log('moment locale:', (window as any).moment?.locale());
-	console.log('========================');
+	console.debug('=== Locale Debug Info ===');
+	console.debug('Current locale:', getLocale());
+	console.debug('localStorage language:', window.localStorage.getItem('language'));
+	console.debug('navigator.language:', navigator.language);
+	console.debug('moment locale:', (window as unknown as Record<string, unknown>).moment);
+	console.debug('========================');
 }
