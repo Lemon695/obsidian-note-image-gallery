@@ -1,7 +1,7 @@
 import {log} from "./log-utils";
 
 /**
- * 重试处理器
+ * Retry handler
  */
 export class RetryHandler {
 	constructor(
@@ -24,12 +24,12 @@ export class RetryHandler {
 				lastError = error as Error;
 
 				if (attempt < this.maxRetries) {
-					log.debug(() => `${context || '操作'} 失败，重试 ${attempt + 1}/${this.maxRetries}`);
+					log.debug(() => `${context || 'Operation'} failed, retrying ${attempt + 1}/${this.maxRetries}`);
 					this.onRetry?.(attempt + 1);
-					// 添加指数退避延迟，避免立即重试
-					await new Promise(resolve => setTimeout(resolve, Math.min(1000 * Math.pow(2, attempt), 5000)));
+					// exponential backoff to avoid immediate retry
+					await new Promise(resolve => window.setTimeout(resolve, Math.min(1000 * Math.pow(2, attempt), 5000)));
 				} else {
-					log.error(() => `${context || '操作'} 达到最大重试次数`, error as Error);
+					log.error(() => `${context || 'Operation'} reached max retries`, error as Error);
 					this.onFinalFailure?.(error as Error);
 				}
 			}

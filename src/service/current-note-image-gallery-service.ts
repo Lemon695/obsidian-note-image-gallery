@@ -1,19 +1,9 @@
-import {App, Modal, Notice, TFile, requestUrl} from 'obsidian';
+import {App, Modal, Notice, TFile, debounce, requestUrl} from 'obsidian';
 import NoteImageGalleryPlugin from "../main";
 import {log} from "../utils/log-utils";
 import {RetryHandler} from "../utils/retry-handler";
 import {ResourceManager} from "../utils/resource-manager";
 import {t} from "../i18n/locale";
-
-// Helper function to set CSS properties
-function setCssProps(element: HTMLElement | Element, styles: Record<string, string>): void {
-	const htmlElement = element as HTMLElement;
-	for (const [key, value] of Object.entries(styles)) {
-		// Convert camelCase to kebab-case for CSS property names
-		const cssKey = key.replace(/([A-Z])/g, '-$1').toLowerCase();
-		htmlElement.style.setProperty(cssKey, value);
-	}
-}
 
 // 定义Electron请求接口（用于向后兼容）
 interface ElectronRequest {
@@ -63,7 +53,10 @@ export class CurrentNoteImageGalleryService extends Modal {
 	private resourceManager: ResourceManager;
 	private retryHandler = new RetryHandler(3);
 	private currentSortType = 'default';  // 保存当前的排序类型
-	private sortDebounceTimer: number | null = null;  // 排序防抖定时器
+	private debouncedSort = debounce((sortType: string) => {
+		log.debug(() => `Debounce ended, applying auto sort, type: ${sortType}`);
+		this.sortImages(sortType);
+	}, 1000);
 	private isClosed = false;  // 标记 Modal 是否已关闭
 
 	constructor(app: App, plugin: NoteImageGalleryPlugin, images: string[]) {
@@ -81,13 +74,13 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 		const {contentEl} = this;
 		contentEl.empty();
-		contentEl.addClass('current-note-image-gallery');
+		contentEl.addClass('nig-gallery');
 
-		const toolbar = contentEl.createDiv('modal-toolbar');
-		const titleEl = toolbar.createDiv('modal-title');
+		const toolbar = contentEl.createDiv('nig-toolbar');
+		const titleEl = toolbar.createDiv('nig-title');
 		titleEl.setText(t('imageGalleryTitle', {count: this.totalImages.toString()}));
 
-		const progressContainer = toolbar.createDiv('progress-container');
+		const progressContainer = toolbar.createDiv('nig-progress-container');
 		progressContainer.createEl('progress', {
 			attr: {
 				max: this.totalImages.toString(),
@@ -95,23 +88,26 @@ export class CurrentNoteImageGalleryService extends Modal {
 			}
 		});
 
-		const progressText = progressContainer.createDiv('progress-text');
+		const progressText = progressContainer.createDiv('nig-progress-text');
 		progressText.setText(`0/${this.totalImages}`);
 
-		const filterToolbar = toolbar.createDiv('filter-toolbar');
+		const filterToolbar = toolbar.createDiv('nig-filter-toolbar');
 
-		const sortContainer = filterToolbar.createDiv('sort-container');
+		const sortContainer = filterToolbar.createDiv('nig-sort-container');
 		sortContainer.createSpan({text: t('sort')});
-		const sortSelect = sortContainer.createEl('select', {cls: 'sort-select'});
+		const sortSelect = sortContainer.createEl('select', {cls: 'nig-sort-select'});
 		sortSelect.createEl('option', {text: t('defaultSort'), value: 'default'});
 		sortSelect.createEl('option', {text: t('sortBySizeDesc'), value: 'size-desc'});
 		sortSelect.createEl('option', {text: t('sortBySizeAsc'), value: 'size-asc'});
 
-		const filterContainer = filterToolbar.createDiv('filter-container');
+		const filterContainer = filterToolbar.createDiv('nig-filter-container');
 		filterContainer.createSpan({text: t('filter')});
-		const allBtn = filterContainer.createEl('button', {text: t('all'), cls: 'filter-btn active'});
-		const localBtn = filterContainer.createEl('button', {text: t('localImages'), cls: 'filter-btn'});
-		const remoteBtn = filterContainer.createEl('button', {text: t('networkImages'), cls: 'filter-btn'});
+		const allBtn = filterContainer.createEl('button', {text: t('all'), cls: 'nig-filter-btn nig-active'});
+		const localBtn = filterContainer.createEl('button', {text: t('localImages'), cls: 'nig-filter-btn'});
+		const remoteBtn = filterContainer.createEl('button', {text: t('networkImages'), cls: 'nig-filter-btn'});
+		allBtn.dataset.filter = 'all';
+		localBtn.dataset.filter = 'local';
+		remoteBtn.dataset.filter = 'remote';
 
 		sortSelect.addEventListener('change', () => {
 			this.sortImages(sortSelect.value);
@@ -119,17 +115,17 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 		[allBtn, localBtn, remoteBtn].forEach(btn => {
 			btn.addEventListener('click', (e) => {
-				[allBtn, localBtn, remoteBtn].forEach(b => b.removeClass('active'));
-				btn.addClass('active');
+				[allBtn, localBtn, remoteBtn].forEach(b => b.removeClass('nig-active'));
+				btn.addClass('nig-active');
 
-				const filter = btn.textContent?.toLowerCase() || 'all';
+				const filter = btn.dataset.filter ?? 'all';
 				this.filterImages(filter);
 			});
 		});
 
 		// 瀑布流容器
-		const container = contentEl.createDiv('image-wall-container');
-		const imageWall = container.createDiv('image-wall waterfall');
+		const container = contentEl.createDiv('nig-image-wall-container');
+		const imageWall = container.createDiv('nig-image-wall nig-waterfall');
 
 		this.setupLazyLoading();
 		this.setupBatchLoading();
@@ -205,7 +201,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 					const isNetworkImage = path.startsWith('http');
 					const isWeiboImage = path.includes('.sinaimg.cn');
 
-					log.debug(() => `队列处理图片: ${path}, 是否网络图片: ${isNetworkImage}, 是否微博图片: ${isWeiboImage}, 当前活跃加载: ${activeLoads}`);
+					log.debug(() => `Processing image: ${path}, network: ${isNetworkImage}, weibo: ${isWeiboImage}, active loads: ${activeLoads}`);
 
 					// 异步执行加载操作，确保 activeLoads 计数器正确管理
 					void (async () => {
@@ -213,27 +209,25 @@ export class CurrentNoteImageGalleryService extends Modal {
 							await this.retryHandler.execute(
 								async () => {
 									const imgEl = imageData.element.querySelector('img') || imageData.element.createEl('img');
-									const loadingTextEl = imageData.element.querySelector('.loading-text') ||
-										imageData.element.createDiv('loading-text');
+									const loadingTextEl = imageData.element.querySelector('.nig-loading-text') ||
+										imageData.element.createDiv('nig-loading-text');
 									loadingTextEl.setText(t('loading'));
 
 									await this.loadImageUnified(path, imgEl, imageData.element, loadingTextEl as HTMLElement, isWeiboImage);
 								},
-								`加载图片 ${path}`
+								`Loading image: ${path}`
 							);
 						} catch {
 							imageData.hasError = true;
-							this.handleImageError(imageData.element, t('loadingFailed'));
-							this.loadedImages++;
-							this.updateProgressBar();
+							this.handleImageLoadFailure(imageData.element, t('loadingFailed'));
 						} finally {
 							// 确保无论成功或失败都减少计数器
 							activeLoads--;
 							imageData.isLoading = false;
-							log.debug(() => `图片处理完成: ${path}, 当前活跃加载: ${activeLoads}`);
+							log.debug(() => `Image processed: ${path}, active loads: ${activeLoads}`);
 
 							// 继续处理队列
-							setTimeout(processQueue, 0);
+							window.setTimeout(processQueue, 0);
 						}
 					})();
 				}
@@ -243,8 +237,8 @@ export class CurrentNoteImageGalleryService extends Modal {
 				const checkQueueStatus = () => {
 					// 如果队列不为空但无活跃加载，并且未在处理中，尝试重启处理
 					if (loadQueue.length > 0 && activeLoads === 0 && !isProcessingQueue) {
-						log.debug(() => `队列处理可能停滞，尝试重启`);
-						setTimeout(processQueue, 100);
+						log.debug(() => `Queue processing may be stalled, attempting restart`);
+						window.setTimeout(processQueue, 100);
 					}
 				};
 
@@ -252,7 +246,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 				checkQueueStatus();
 
 				if (loadQueue.length > 0) {
-					setTimeout(checkQueueStatus, 500);
+					window.setTimeout(checkQueueStatus, 500);
 				}
 			}
 		};
@@ -263,7 +257,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 			if (!imageData.isLoading && !imageData.hasError &&
 				!loadQueue.some(item => item.path === imagePath)) {
 				const priority = isVisible ? 'high' : 'low';
-				log.debug(() => `将图片加入队列: ${imagePath}, 当前队列长度: ${loadQueue.length}, 当前活跃加载: ${activeLoads}`);
+				log.debug(() => `Queuing image: ${imagePath}, queue length: ${loadQueue.length}, active loads: ${activeLoads}`);
 				loadQueue.push({
 					path: imagePath,
 					retries: 0,
@@ -271,29 +265,29 @@ export class CurrentNoteImageGalleryService extends Modal {
 					timestamp: Date.now()
 				});
 				sortQueue();  // 立即排序
-				setTimeout(processQueue, 0);
+				window.setTimeout(processQueue, 0);
 			}
 		};
 
-		const queueMonitor = setInterval(() => {
+		const queueMonitor = window.setInterval(() => {
 			if (loadQueue.length > 0 || activeLoads > 0) {
-				log.debug(() => `队列监控 - 队列长度: ${loadQueue.length}, 活跃加载: ${activeLoads}, 是否处理中: ${isProcessingQueue}`);
+				log.debug(() => `Queue monitor - queue length: ${loadQueue.length}, active loads: ${activeLoads}, processing: ${isProcessingQueue}`);
 
 				// 如果队列有内容但没有活跃加载，并且未处理中，尝试重启队列处理
 				if (loadQueue.length > 0 && activeLoads === 0 && !isProcessingQueue) {
-					log.debug(() => '队列似乎卡住了，尝试重启处理');
-					setTimeout(processQueue, 100);
+					log.debug(() => 'Queue appears stuck, attempting restart');
+					window.setTimeout(processQueue, 100);
 				}
 			}
 		}, 5000);
 
 		this.cleanupQueueMonitor = () => {
-			clearInterval(queueMonitor);
+			window.clearInterval(queueMonitor);
 		};
 	}
 
 	private updateElementPositions() {
-		const container = this.contentEl.querySelector('.image-wall-container');
+		const container = this.contentEl.querySelector('.nig-image-wall-container');
 		if (!container) return;
 
 		this.imageDataMap.forEach((data) => {
@@ -310,13 +304,13 @@ export class CurrentNoteImageGalleryService extends Modal {
 	}
 
 	private setupVirtualScroll() {
-		const container = this.contentEl.querySelector('.image-wall-container');
+		const container = this.contentEl.querySelector('.nig-image-wall-container');
 		if (!container) return;
 
 		const BUFFER_SIZE = 1000;
 		const boundUpdateElementPositions = () => this.updateElementPositions();
 
-		setTimeout(boundUpdateElementPositions, 500);
+		window.setTimeout(boundUpdateElementPositions, 500);
 
 		// 简化的滚动处理
 		const scrollHandler = () => {
@@ -325,8 +319,8 @@ export class CurrentNoteImageGalleryService extends Modal {
 			const viewportTop = scrollTop - BUFFER_SIZE;
 			const viewportBottom = scrollTop + viewportHeight + BUFFER_SIZE;
 
-			const activeFilterBtn = this.contentEl.querySelector('.filter-btn.active');
-			const currentFilter = activeFilterBtn?.textContent?.toLowerCase() || 'all';
+			const activeFilterBtn = this.contentEl.querySelector('.nig-filter-btn.nig-active');
+			const currentFilter = (activeFilterBtn as HTMLElement | null)?.dataset.filter ?? 'all';
 
 			this.imageDataMap.forEach((data) => {
 				if (!data.position) return;
@@ -335,11 +329,11 @@ export class CurrentNoteImageGalleryService extends Modal {
 				const matchesFilter = this.checkFilterMatch(currentFilter, isRemote);
 
 				if (!matchesFilter) {
-					setCssProps(data.element, {display: 'none'});
+					data.element.setCssStyles({display: 'none'});
 					return;
 				}
 
-				setCssProps(data.element, {display: ''});
+				data.element.setCssStyles({display: ''});
 
 				const isVisible = data.position.bottom >= viewportTop && data.position.top <= viewportBottom;
 
@@ -347,10 +341,10 @@ export class CurrentNoteImageGalleryService extends Modal {
 					if (!data.isLoading && !data.objectUrl && !data.hasError) {
 						this.queueImageLoad(data.path, true);
 					}
-					setCssProps(data.element, {visibility: ''});
+					data.element.setCssStyles({visibility: ''});
 					this.ensureImageVisible(data);
 				} else {
-					setCssProps(data.element, {visibility: 'hidden'});
+					data.element.setCssStyles({visibility: 'hidden'});
 					if (!data.isLoading && !data.objectUrl && !data.hasError) {
 						this.queueImageLoad(data.path, false);
 					}
@@ -365,7 +359,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 		resizeObserver.observe(container);
 
 		const imageLoadHandler = () => {
-			setTimeout(() => {
+			window.setTimeout(() => {
 				boundUpdateElementPositions();
 				scrollHandler();
 			}, 50);
@@ -389,9 +383,9 @@ export class CurrentNoteImageGalleryService extends Modal {
 	}
 
 	private checkFilterMatch(filter: string, isRemote: boolean): boolean {
-		return filter === '全部' || filter === 'all' ||
-			((filter === '本地图片' || filter === 'local') && !isRemote) ||
-			((filter === '网络图片' || filter === 'remote') && isRemote);
+		return filter === 'all' ||
+			(filter === 'local' && !isRemote) ||
+			(filter === 'remote' && isRemote);
 	}
 
 	private ensureImageVisible(data: ImageData): void {
@@ -399,9 +393,9 @@ export class CurrentNoteImageGalleryService extends Modal {
 		images.forEach(imgEl => {
 			const currentOpacity = window.getComputedStyle(imgEl).opacity;
 			if (imgEl.complete && imgEl.naturalWidth > 0 && currentOpacity !== '1') {
-				setCssProps(imgEl, {opacity: '1'});
+				imgEl.setCssStyles({opacity: '1'});
 				imgEl.setAttribute('complete', 'true');
-				imgEl.classList.add('loaded');
+				imgEl.classList.add('nig-loaded');
 			}
 		});
 	}
@@ -410,12 +404,12 @@ export class CurrentNoteImageGalleryService extends Modal {
 		// 保存当前的排序类型
 		this.currentSortType = sortType;
 
-		const container = this.contentEl.querySelector('.image-wall');
+		const container = this.contentEl.querySelector('.nig-image-wall');
 		if (!container) return;
 
-		const items = Array.from(container.querySelectorAll('.image-item'));
+		const items = Array.from(container.querySelectorAll('.nig-image-item'));
 
-		log.debug(() => `开始排序图片，总数: ${items.length}, 排序类型: ${sortType}`);
+		log.debug(() => `Sorting images, total: ${items.length}, type: ${sortType}`);
 
 		// 根据排序类型排序
 		if (sortType === 'size-desc' || sortType === 'size-asc') {
@@ -427,7 +421,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 				const isLoaded = img && img.naturalWidth > 0;
 
 				if (img) {
-					log.debug(() => `检查图片 [${imagePath}]: complete=${img.complete}, naturalWidth=${img.naturalWidth}, naturalHeight=${img.naturalHeight}, isLoaded=${isLoaded}`);
+					log.debug(() => `Checking image [${imagePath}]: complete=${img.complete}, naturalWidth=${img.naturalWidth}, naturalHeight=${img.naturalHeight}, isLoaded=${isLoaded}`);
 				}
 
 				return isLoaded;
@@ -439,13 +433,13 @@ export class CurrentNoteImageGalleryService extends Modal {
 				return !img || img.naturalWidth === 0;
 			});
 
-			log.debug(() => `已加载图片: ${loadedItems.length}, 未加载图片: ${unloadedItems.length}`);
+			log.debug(() => `Loaded images: ${loadedItems.length}, unloaded: ${unloadedItems.length}`);
 
 			// 对已加载的图片按尺寸排序
 			loadedItems.sort((a, b) => {
 				const aSize = this.getImageSize(a);
 				const bSize = this.getImageSize(b);
-				log.debug(() => `比较图片尺寸 - A: ${aSize}, B: ${bSize}`);
+				log.debug(() => `Comparing image sizes - A: ${aSize}, B: ${bSize}`);
 				return sortType === 'size-desc' ? bSize - aSize : aSize - bSize;
 			});
 
@@ -453,7 +447,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 			loadedItems.forEach(item => container.appendChild(item));
 			unloadedItems.forEach(item => container.appendChild(item));
 
-			log.debug(() => `排序完成，已重新排列 ${loadedItems.length} 张已加载图片`);
+			log.debug(() => `Sort complete, reordered ${loadedItems.length} loaded images`);
 		} else {
 			// 默认排序：恢复原始顺序（按照imageDataMap的顺序）
 			const originalOrder: Element[] = [];
@@ -463,13 +457,13 @@ export class CurrentNoteImageGalleryService extends Modal {
 				}
 			});
 			originalOrder.forEach(item => container.appendChild(item));
-			log.debug(() => `恢复默认排序`);
+			log.debug(() => `Restoring default sort`);
 		}
 
 		// 排序后更新虚拟滚动的位置信息
-		setTimeout(() => {
+		window.setTimeout(() => {
 			this.updateElementPositions();
-			log.debug(() => `排序后位置信息已更新`);
+			log.debug(() => `Position info updated after sort`);
 		}, 100);
 	}
 
@@ -483,7 +477,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 		// 只在图片实际加载时记录尺寸
 		if (size > 0) {
-			log.debug(() => `图片尺寸: ${width}x${height} = ${size}`);
+			log.debug(() => `Image size: ${width}x${height} = ${size}`);
 		}
 
 		return size;
@@ -495,22 +489,18 @@ export class CurrentNoteImageGalleryService extends Modal {
 			const imagePath = data.path;
 			const isRemote = imagePath.startsWith('http://') || imagePath.startsWith('https://');
 
-			if (filterType === 'all' || filterType === '全部') {
-				setCssProps(data.element, { display: '', visibility: '' });
-			} else if ((filterType === '本地图片' || filterType === 'local') && !isRemote) {
-				setCssProps(data.element, { display: '', visibility: '' });
-			} else if ((filterType === '网络图片' || filterType === 'remote') && isRemote) {
-				setCssProps(data.element, { display: '', visibility: '' });
+			if (filterType === 'all' || (filterType === 'local' && !isRemote) || (filterType === 'remote' && isRemote)) {
+				data.element.setCssStyles({ display: '', visibility: '' });
 			} else {
-				setCssProps(data.element, { display: 'none' });
+				data.element.setCssStyles({ display: 'none' });
 			}
 		});
 
 		// 在筛选后更新位置信息，然后再触发滚动处理
-		const container = this.contentEl.querySelector('.image-wall-container');
+		const container = this.contentEl.querySelector('.nig-image-wall-container');
 		if (container) {
 			// 更新位置信息
-			setTimeout(() => {
+			window.setTimeout(() => {
 				this.imageDataMap.forEach((data) => {
 					const el = data.element;
 					if (el && window.getComputedStyle(el).display !== 'none') {
@@ -530,7 +520,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 	}
 
 	private createImageElement(imagePath: string, imageWall: HTMLElement) {
-		const imageDiv = imageWall.createDiv('image-item');
+		const imageDiv = imageWall.createDiv('nig-image-item');
 		imageDiv.setAttribute('data-path', imagePath);
 
 		// 存储图片元素引用
@@ -575,7 +565,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 			const imagePath = this.images[i];
 			const imageDiv = document.createElement('div');
-			imageDiv.className = 'image-item';
+			imageDiv.className = 'nig-image-item';
 			imageDiv.setAttribute('data-path', imagePath);
 
 			// 存储图片元素引用
@@ -607,7 +597,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 			// 每批次渲染后让出主线程
 			if ((i + 1) % BATCH_SIZE === 0) {
 				imageWall.appendChild(fragment);
-				await new Promise(resolve => setTimeout(resolve, 0));
+				await new Promise(resolve => window.setTimeout(resolve, 0));
 			}
 		}
 
@@ -629,10 +619,10 @@ export class CurrentNoteImageGalleryService extends Modal {
 		loadingText: HTMLElement
 	): Promise<void> {
 		return new Promise((resolve, reject) => {
-			log.debug(() => `增强型本地图片加载: ${imagePath}`);
+			log.debug(() => `Enhanced local image loading: ${imagePath}`);
 
 			img.onload = () => {
-				log.debug(() => `本地图片加载成功: ${imagePath}`);
+				log.debug(() => `Local image loaded: ${imagePath}`);
 				this.handleImageLoadSuccess(img, imageDiv, loadingText, imagePath);
 
 				const imageData = this.imageDataMap.get(imagePath);
@@ -644,12 +634,12 @@ export class CurrentNoteImageGalleryService extends Modal {
 			};
 
 			img.onerror = async (e) => {
-				log.error(() => `本地图片加载失败 (${img.src}): ${imagePath}`);
+				log.error(() => `Local image load failed (${img.src}): ${imagePath}`);
 
 				try {
 					const alternativePaths = this.plugin.imageLoader.getAlternativeLocalPaths(imagePath);
 					for (const path of alternativePaths) {
-						log.debug(() => `尝试替代路径: ${path}`);
+						log.debug(() => `Trying alternative path: ${path}`);
 
 						const success = await this.plugin.imageLoader.loadLocalImage(path, img);
 						if (success) {
@@ -658,9 +648,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 						}
 					}
 
-					this.handleImageError(imageDiv, t('imageNotFound'));
-					this.loadedImages++;
-					this.updateProgressBar();
+					this.handleImageLoadFailure(imageDiv, t('imageNotFound'));
 
 					// 更新图片数据状态
 					const imageData = this.imageDataMap.get(imagePath);
@@ -672,12 +660,10 @@ export class CurrentNoteImageGalleryService extends Modal {
 					const error = e instanceof Error ? e : new Error('Image load failed');
 					reject(error);
 				} catch (error) {
-					log.error(() => `处理替代路径时出错:`, error instanceof Error ? error : undefined);
+					log.error(() => `Error processing alternative path:`, error instanceof Error ? error : undefined);
 
 					// 显示错误
-					this.handleImageError(imageDiv, t('processingFailed'));
-					this.loadedImages++;
-					this.updateProgressBar();
+					this.handleImageLoadFailure(imageDiv, t('processingFailed'));
 
 					const imageData = this.imageDataMap.get(imagePath);
 					if (imageData) {
@@ -698,7 +684,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 					}
 				})
 				.catch((error: unknown) => {
-					log.error(() => `加载器加载失败，回退到标准方法: ${imagePath}`, error instanceof Error ? error : undefined);
+					log.error(() => `Loader failed, falling back to standard method: ${imagePath}`, error instanceof Error ? error : undefined);
 					img.src = this.plugin.imageLoader.getResourcePath(imagePath);
 				});
 		});
@@ -731,7 +717,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 							img.onerror = imgReject;
 
 							// 设置超时
-							setTimeout(() => imgReject(new Error('Timeout')), 10000);
+							window.setTimeout(() => imgReject(new Error('Timeout')), 10000);
 						});
 
 						resolve();
@@ -746,7 +732,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 				resolve();
 			}
 		} catch (error) {
-			log.error(() => `高级加载尝试失败: ${imagePath}`, error instanceof Error ? error : undefined);
+			log.error(() => `Advanced load attempt failed: ${imagePath}`, error instanceof Error ? error : undefined);
 
 			// 最后的回退方案 - 直接设置URL
 			if (isNetworkImage) {
@@ -790,7 +776,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 			};
 
 			img.onerror = (e) => {
-				log.error(() => `从objectURL加载图片失败:${imagePath}`);
+				log.error(() => `Failed to load image from objectURL: ${imagePath}`);
 				URL.revokeObjectURL(objectUrl);
 				// 最后一次尝试直接加载
 				this.loadImageDirectly(imagePath, img, imageDiv, loadingText, resolve, reject, isWeiboImage);
@@ -808,8 +794,8 @@ export class CurrentNoteImageGalleryService extends Modal {
 				const contentType = blob.type || response.headers['content-type'] || 'image/jpeg';
 				const etag = response.headers['etag'];
 
-				log.info(() => `开始缓存网络图片: ${imagePath}`);
-				log.debug(() => `缓存详情 - 类型: ${contentType}, 大小: ${Math.round(blob.size / 1024)}KB`);
+				log.info(() => `Caching network image: ${imagePath}`);
+				log.debug(() => `Cache details - type: ${contentType}, size: ${Math.round(blob.size / 1024)}KB`);
 
 				const arrayBuffer = await blob.arrayBuffer();
 
@@ -820,15 +806,15 @@ export class CurrentNoteImageGalleryService extends Modal {
 						etag || undefined,
 						contentType
 					);
-					log.info(() => `✓ 网络图片缓存成功: ${imagePath}`);
+					log.info(() => `✓ Network image cached: ${imagePath}`);
 				} catch (cacheError) {
-					log.error(() => `✗ 网络图片缓存失败: ${imagePath}`, cacheError instanceof Error ? cacheError : undefined);
+					log.error(() => `✗ Network image cache failed: ${imagePath}`, cacheError instanceof Error ? cacheError : undefined);
 				}
 			} catch (error) {
-				log.error(() => '缓存图片过程中出错:', error instanceof Error ? error : undefined);
+				log.error(() => 'Error during image caching:', error instanceof Error ? error : undefined);
 			}
 		} catch (error) {
-			log.error(() => `自定义fetch加载失败: ${imagePath}`, error instanceof Error ? error : undefined);
+			log.error(() => `Custom fetch load failed: ${imagePath}`, error instanceof Error ? error : undefined);
 			// 直接进入简单加载模式
 			this.loadImageDirectly(imagePath, img, imageDiv, loadingText, resolve, reject, isWeiboImage);
 		}
@@ -843,7 +829,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 		reject: (error: unknown) => void,
 		isWeiboImage = false
 	): void {
-		log.debug(() => `直接加载图片: ${imagePath}`);
+		log.debug(() => `Direct image load: ${imagePath}`);
 
 		// 添加对已成功加载的图片进行缓存的功能
 		const setupCaching = (imageElement: HTMLImageElement) => {
@@ -860,7 +846,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 				const ctx = canvas.getContext('2d');
 				if (!ctx) {
-					log.error(() => `无法创建canvas上下文用于缓存: ${imagePath}`);
+					log.error(() => `Cannot create canvas context for caching: ${imagePath}`);
 					return;
 				}
 
@@ -872,13 +858,13 @@ export class CurrentNoteImageGalleryService extends Modal {
 				try {
 					canvas.toBlob((blob) => {
 						if (!blob) {
-							log.error(() => `无法从画布创建Blob: ${imagePath}`);
+							log.error(() => `Cannot create Blob from canvas: ${imagePath}`);
 							return;
 						}
 
 						void (async () => {
 							try {
-								log.debug(() => `从直接加载的图片创建缓存: ${imagePath}, 大小: ${Math.round(blob.size / 1024)}KB`);
+								log.debug(() => `Creating cache from directly loaded image: ${imagePath}, size: ${Math.round(blob.size / 1024)}KB`);
 
 								// 转换为ArrayBuffer
 								const arrayBuffer = await blob.arrayBuffer();
@@ -891,17 +877,17 @@ export class CurrentNoteImageGalleryService extends Modal {
 									blob.type || 'image/jpeg'
 								);
 
-								log.debug(() => `成功缓存直接加载的图片: ${imagePath}`);
+								log.debug(() => `Successfully cached directly loaded image: ${imagePath}`);
 							} catch (error) {
 								const errorMsg = error instanceof Error ? error.message : String(error);
-								log.error(() => `缓存直接加载的图片失败: ${imagePath}, 错误: ${errorMsg}`, error instanceof Error ? error : undefined);
+								log.error(() => `Failed to cache directly loaded image: ${imagePath}, error: ${errorMsg}`, error instanceof Error ? error : undefined);
 							}
 						})();
 					}, 'image/jpeg', 0.95); // 使用JPEG格式，95%质量
 				} catch (blobError) {
 					// 捕获SecurityError (canvas被污染时)
 					if (blobError instanceof DOMException && blobError.name === 'SecurityError') {
-						log.debug(() => `跨域图片无法通过canvas缓存（CORS限制）: ${imagePath}`);
+						log.debug(() => `Cross-origin image cannot be cached via canvas (CORS): ${imagePath}`);
 					} else {
 						throw blobError;
 					}
@@ -909,13 +895,13 @@ export class CurrentNoteImageGalleryService extends Modal {
 			} catch (error) {
 				// 只记录非SecurityError的错误
 				if (!(error instanceof DOMException && error.name === 'SecurityError')) {
-					log.error(() => `设置图片缓存时出错: ${imagePath}`, error instanceof Error ? error : undefined);
+					log.error(() => `Error setting image cache: ${imagePath}`, error instanceof Error ? error : undefined);
 				}
 			}
 		};
 
 		img.onload = () => {
-			log.debug(() => `图片直接加载成功: ${imagePath}`);
+			log.debug(() => `Image loaded directly: ${imagePath}`);
 			this.handleImageLoadSuccess(img, imageDiv, loadingText, imagePath);
 
 			// 图片加载成功后尝试缓存
@@ -925,20 +911,20 @@ export class CurrentNoteImageGalleryService extends Modal {
 		};
 
 		img.onerror = async (e) => {
-			const err = e instanceof Error ? e : new Error(`图片直接加载失败: ${imagePath}`);
-			log.error(() => `图片直接加载失败: ${imagePath}`, err);
+			const err = e instanceof Error ? e : new Error(`Image direct load failed: ${imagePath}`);
+			log.error(() => `Image direct load failed: ${imagePath}`, err);
 
 			// 尝试从缓存降级加载
 			if (this.plugin.settings.enableCache) {
 				try {
 					const cached = await this.plugin.imageCacheService.getCachedImage(imagePath);
 					if (cached && !this.isClosed) {
-						log.debug(() => `从缓存降级加载: ${imagePath}`);
+						log.debug(() => `Fallback load from cache: ${imagePath}`);
 						img.src = cached.data;
 						return;
 					}
 				} catch {
-					log.debug(() => `缓存降级失败: ${imagePath}`);
+					log.debug(() => `Cache fallback failed: ${imagePath}`);
 				}
 			}
 
@@ -946,22 +932,20 @@ export class CurrentNoteImageGalleryService extends Modal {
 			if (!imagePath.startsWith('http://') && !imagePath.startsWith('https://')) {
 				const alternativePath = this.tryAlternativeLocalPath(imagePath);
 				if (alternativePath && alternativePath !== img.src) {
-					log.debug(() => `尝试替代路径: ${alternativePath}`);
+					log.debug(() => `Trying alternative path: ${alternativePath}`);
 					img.src = alternativePath;
 					return; // 返回等待新路径的加载结果
 				}
 			}
 
-			this.handleImageError(imageDiv, '加载失败');
-			this.loadedImages++;
-			this.updateProgressBar();
+			this.handleImageLoadFailure(imageDiv, t('loadingFailed'));
 			reject(err);
 		};
 
 		// 如果是微博图片，尝试使用 Obsidian 的 requestUrl API
 		if (isWeiboImage) {
 			try {
-				log.debug(() => `使用 Obsidian requestUrl 加载微博图片: ${imagePath}`);
+				log.debug(() => `Loading Weibo image via requestUrl: ${imagePath}`);
 
 				requestUrl({
 					url: imagePath,
@@ -986,7 +970,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 						// 尝试缓存图片
 						try {
 							const contentType = response.headers['content-type'] || 'image/jpeg';
-							log.debug(() => `缓存从 requestUrl 获取的微博图片: ${imagePath}, 类型: ${contentType}`);
+							log.debug(() => `Caching Weibo image from requestUrl: ${imagePath}, type: ${contentType}`);
 
 							await this.plugin.imageCacheService.cacheImage(
 								imagePath,
@@ -995,22 +979,22 @@ export class CurrentNoteImageGalleryService extends Modal {
 								contentType
 							);
 
-							log.debug(() => `成功缓存微博图片: ${imagePath}`);
+							log.debug(() => `Weibo image cached: ${imagePath}`);
 						} catch (cacheError) {
-							log.error(() => `缓存微博图片失败: ${imagePath}`, cacheError instanceof Error ? cacheError : undefined);
+							log.error(() => `Failed to cache Weibo image: ${imagePath}`, cacheError instanceof Error ? cacheError : undefined);
 						}
 					} catch (error) {
-						log.error(() => '处理 requestUrl 响应失败:', error instanceof Error ? error : undefined);
+						log.error(() => 'Failed to process requestUrl response:', error instanceof Error ? error : undefined);
 						img.src = imagePath; // 失败时尝试直接设置
 					}
 				}).catch((error: Error | undefined) => {
-					log.error(() => `requestUrl 加载微博图片失败: ${imagePath}`, error instanceof Error ? error : undefined);
+					log.error(() => `requestUrl failed to load Weibo image: ${imagePath}`, error instanceof Error ? error : undefined);
 					img.src = imagePath; // 失败时尝试直接设置
 				});
 
 				return; // 等待 requestUrl 结果
 			} catch (e) {
-				log.debug(() => `requestUrl 不可用，直接设置src: ${e}`);
+				log.debug(() => `requestUrl unavailable, setting src directly: ${e}`);
 			}
 		}
 
@@ -1034,10 +1018,8 @@ export class CurrentNoteImageGalleryService extends Modal {
 					}
 				}
 			} catch (error) {
-				log.error(() => `解析本地图片路径失败: ${imagePath}`, error instanceof Error ? error : undefined);
-				this.handleImageError(imageDiv, '找不到图片');
-				this.loadedImages++;
-				this.updateProgressBar();
+				log.error(() => `Failed to resolve local image path: ${imagePath}`, error instanceof Error ? error : undefined);
+				this.handleImageLoadFailure(imageDiv, t('imageNotFound'));
 				reject(error);
 			}
 		}
@@ -1085,7 +1067,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 			return this.getResourcePath(originalPath);
 		} catch (error) {
-			log.error(() => '尝试替代路径失败:', error instanceof Error ? error : undefined);
+			log.error(() => 'Failed trying alternative path:', error instanceof Error ? error : undefined);
 			return null;
 		}
 	}
@@ -1102,14 +1084,14 @@ export class CurrentNoteImageGalleryService extends Modal {
 	}
 
 	private handleImageLoadSuccess(img: HTMLImageElement, imageDiv: HTMLElement, loadingText: HTMLElement, imagePath: string): void {
-		log.debug(() => `图片加载成功处理: ${imagePath}, 宽度: ${img.naturalWidth}, 高度: ${img.naturalHeight}, complete: ${img.complete}`);
+		log.debug(() => `Image load success: ${imagePath}, width: ${img.naturalWidth}, height: ${img.naturalHeight}, complete: ${img.complete}`);
 
 		if (loadingText && loadingText.parentNode) {
 			loadingText.remove();
 		}
 
 		// 移除占位符
-		const placeholder = imageDiv.querySelector('.image-placeholder');
+		const placeholder = imageDiv.querySelector('.nig-image-placeholder');
 		if (placeholder) {
 			placeholder.remove();
 		}
@@ -1123,21 +1105,21 @@ export class CurrentNoteImageGalleryService extends Modal {
 		const baseHeight = 10;
 		const heightSpan = Math.min(Math.ceil(ratio * baseHeight), 30);
 
-		setCssProps(imageDiv, { gridRowEnd: `span ${heightSpan}` });
+		imageDiv.setCssStyles({ gridRowEnd: `span ${heightSpan}` });
 
 		// 强制设置图片可见
-		setCssProps(img, { opacity: '1' });
+		img.setCssStyles({ opacity: '1' });
 		img.setAttribute('complete', 'true');
-		img.classList.add('loaded');
+		img.classList.add('nig-loaded');
 
 		void img.offsetHeight; // 触发重绘
 
 		// 确保样式被应用（额外保障）
-		setTimeout(() => {
+		window.setTimeout(() => {
 			if (window.getComputedStyle(img).opacity !== '1') {
-				log.debug(() => `修复延迟显示: ${imagePath}`);
-				setCssProps(img, { opacity: '1' });
-				img.classList.add('loaded');
+				log.debug(() => `Fixing delayed display: ${imagePath}`);
+				img.setCssStyles({ opacity: '1' });
+				img.classList.add('nig-loaded');
 
 				// 触发父元素重新计算布局
 				if (imageDiv.parentElement) {
@@ -1156,14 +1138,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 		// 如果当前有非默认的排序选项，使用防抖延迟重新应用排序
 		if (this.currentSortType !== 'default') {
-			if (this.sortDebounceTimer !== null) {
-				clearTimeout(this.sortDebounceTimer);
-			}
-			this.sortDebounceTimer = window.setTimeout(() => {
-				log.debug(() => `防抖延迟结束，执行自动排序，类型: ${this.currentSortType}`);
-				this.sortImages(this.currentSortType);
-				this.sortDebounceTimer = null;
-			}, 1000);  // 增加延迟到1000ms，给图片更多时间加载
+			this.debouncedSort(this.currentSortType);
 		}
 	}
 
@@ -1187,7 +1162,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 		if (isNetworkImage) {
 			try {
 				if (this.plugin.settings.enableCache) {
-					log.debug(() => `检查图片缓存: ${imagePath}`);
+					log.debug(() => `Checking image cache: ${imagePath}`);
 
 					// 异步获取缓存
 					const cachedImage = await this.plugin.imageCacheService.getCachedImage(imagePath);
@@ -1195,20 +1170,20 @@ export class CurrentNoteImageGalleryService extends Modal {
 					if (this.isClosed) return;
 
 					if (cachedImage) {
-						log.info(() => `✓ 缓存命中，从缓存加载: ${imagePath}`);
+						log.info(() => `✓ Cache hit, loading from cache: ${imagePath}`);
 						loadingText.setText(t('loadingFromCache'));
 
 						await new Promise<void>((resolve, reject) => {
 							img.onload = () => {
 								if (this.isClosed) return;
-								log.info(() => `✓ 缓存图片加载成功: ${imagePath}`);
+								log.info(() => `✓ Cached image loaded: ${imagePath}`);
 								this.handleImageLoadSuccess(img, imageDiv, loadingText, imagePath);
 								resolve();
 							};
 
 							img.onerror = (e) => {
-								const error = e instanceof Error ? e : new Error(`缓存图片加载失败: ${imagePath}`);
-								log.error(() => `✗ 缓存图片加载失败: ${imagePath}`, error);
+								const error = e instanceof Error ? e : new Error(`Failed to load cached image: ${imagePath}`);
+								log.error(() => `✗ Cached image load failed: ${imagePath}`, error);
 								reject(error);
 							};
 
@@ -1221,13 +1196,13 @@ export class CurrentNoteImageGalleryService extends Modal {
 						});
 						return;
 					} else {
-						log.debug(() => `缓存未命中，从网络加载: ${imagePath}`);
+						log.debug(() => `Cache miss, loading from network: ${imagePath}`);
 					}
 				} else {
-					log.debug(() => `图片缓存已禁用`);
+					log.debug(() => `Image cache disabled`);
 				}
 			} catch (error) {
-				log.error(() => `获取缓存出错: ${imagePath}`, error instanceof Error ? error : undefined);
+				log.error(() => `Error fetching cache: ${imagePath}`, error instanceof Error ? error : undefined);
 			}
 
 			if (this.isClosed) return;
@@ -1255,7 +1230,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 			const directLoadSuccess = await new Promise<boolean>((imgResolve) => {
 				const onload = async () => {
-					log.debug(() => `直接加载网络图片成功: ${imagePath}`);
+					log.debug(() => `Network image loaded directly: ${imagePath}`);
 					this.handleImageLoadSuccess(img, imageDiv, loadingText, imagePath);
 
 					// 直接加载成功后，尝试缓存图片
@@ -1268,7 +1243,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 				};
 
 				const onerror = (e: Event | string) => {
-					log.error(() => `直接加载网络图片失败: ${imagePath}, 尝试高级加载方式`);
+					log.error(() => `Direct network image load failed: ${imagePath}, trying advanced method`);
 					imgResolve(false);
 				};
 
@@ -1277,7 +1252,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 				img.src = imagePath;
 
 				// 设置超时
-				setTimeout(() => {
+				window.setTimeout(() => {
 					if (!img.complete || img.naturalWidth === 0) {
 						onerror('timeout');
 					}
@@ -1302,7 +1277,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 			const ctx = canvas.getContext('2d');
 			if (!ctx) {
-				log.error(() => `无法创建canvas上下文用于缓存: ${imagePath}`);
+				log.error(() => `Cannot create canvas context for caching: ${imagePath}`);
 				return;
 			}
 
@@ -1313,14 +1288,14 @@ export class CurrentNoteImageGalleryService extends Modal {
 			await new Promise<void>((blobResolve) => {
 				canvas.toBlob((blob) => {
 					if (!blob) {
-						log.error(() => `无法从画布创建Blob: ${imagePath}`);
+						log.error(() => `Cannot create Blob from canvas: ${imagePath}`);
 						blobResolve();
 						return;
 					}
 
 					void (async () => {
 						try {
-							log.debug(() => `从直接加载的图片创建缓存: ${imagePath}, 大小: ${Math.round(blob.size / 1024)}KB`);
+							log.debug(() => `Creating cache from directly loaded image: ${imagePath}, size: ${Math.round(blob.size / 1024)}KB`);
 
 							// 转换为ArrayBuffer
 							const arrayBuffer = await blob.arrayBuffer();
@@ -1333,16 +1308,16 @@ export class CurrentNoteImageGalleryService extends Modal {
 								blob.type || 'image/jpeg'
 							);
 
-							log.info(() => `✓ 成功缓存直接加载的图片: ${imagePath}`);
+							log.info(() => `✓ Successfully cached directly loaded image: ${imagePath}`);
 						} catch (error) {
-							log.error(() => `缓存直接加载的图片失败: ${imagePath}`, error instanceof Error ? error : undefined);
+							log.error(() => `Failed to cache directly loaded image: ${imagePath}`, error instanceof Error ? error : undefined);
 						}
 						blobResolve();
 					})();
 				}, 'image/jpeg', 0.9);
 			});
 		} catch (error) {
-			log.error(() => `缓存图片过程中出错: ${imagePath}`, error instanceof Error ? error : undefined);
+			log.error(() => `Error during image caching: ${imagePath}`, error instanceof Error ? error : undefined);
 		}
 	}
 
@@ -1401,7 +1376,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 		const MAX_RETRIES = 3;
 
 		try {
-			log.debug(() => `使用 requestUrl 加载微博图片 (无缓存): ${imagePath}`);
+			log.debug(() => `Loading Weibo image via requestUrl (no cache): ${imagePath}`);
 
 			const response = await requestUrl({
 				url: imagePath,
@@ -1429,7 +1404,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 				}
 
 				// 移除占位符
-				const placeholder = imageDiv.querySelector('.image-placeholder');
+				const placeholder = imageDiv.querySelector('.nig-image-placeholder');
 				if (placeholder) {
 					placeholder.remove();
 				}
@@ -1438,8 +1413,8 @@ export class CurrentNoteImageGalleryService extends Modal {
 				const baseHeight = 10;
 				const heightSpan = Math.min(Math.ceil(ratio * baseHeight), 30);
 
-				setCssProps(imageDiv, { gridRowEnd: `span ${heightSpan}` });
-				setCssProps(img, { opacity: '1' });
+				imageDiv.setCssStyles({ gridRowEnd: `span ${heightSpan}` });
+				img.setCssStyles({ opacity: '1' });
 				this.loadedImages++;
 				this.updateProgressBar();
 
@@ -1453,14 +1428,12 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 			img.onerror = async () => {
 				if (retryCount < MAX_RETRIES) {
-					log.debug(() => `重试微博图片加载 (${retryCount + 1}/${MAX_RETRIES}): ${imagePath}`);
+					log.debug(() => `Retrying Weibo image load (${retryCount + 1}/${MAX_RETRIES}): ${imagePath}`);
 					await this.loadWeiboImage(imagePath, img, imageDiv, loadingText, retryCount + 1);
 					resolve();
 				} else {
-					this.handleImageError(imageDiv, '加载失败');
-					this.loadedImages++;
-					this.updateProgressBar();
-					reject(new Error('达到最大重试次数'));
+					this.handleImageLoadFailure(imageDiv, t('loadingFailed'));
+					reject(new Error('Max retries reached'));
 				}
 			};
 
@@ -1479,12 +1452,12 @@ export class CurrentNoteImageGalleryService extends Modal {
 					undefined,
 					contentType
 				);
-				log.debug(() => `成功缓存微博图片: ${imagePath}`);
+				log.debug(() => `Weibo image cached: ${imagePath}`);
 			} catch (cacheError) {
-				log.error(() => `缓存微博图片失败: ${imagePath}`, cacheError instanceof Error ? cacheError : undefined);
+				log.error(() => `Failed to cache Weibo image: ${imagePath}`, cacheError instanceof Error ? cacheError : undefined);
 			}
 		} catch (error) {
-			log.error(() => `requestUrl 加载微博图片失败: ${imagePath}`, error instanceof Error ? error : undefined);
+			log.error(() => `requestUrl failed to load Weibo image: ${imagePath}`, error instanceof Error ? error : undefined);
 
 			const imageData = this.imageDataMap.get(imagePath);
 			if (imageData) {
@@ -1492,16 +1465,14 @@ export class CurrentNoteImageGalleryService extends Modal {
 			}
 
 			if (retryCount < MAX_RETRIES) {
-				log.debug(() => `请求失败后重试 (${retryCount + 1}/${MAX_RETRIES}): ${imagePath}`);
-				setTimeout(() => {
+				log.debug(() => `Retrying after request failure (${retryCount + 1}/${MAX_RETRIES}): ${imagePath}`);
+				window.setTimeout(() => {
 					this.loadWeiboImage(imagePath, img, imageDiv, loadingText, retryCount + 1)
 						.then(resolve)
 						.catch(reject);
 				}, 1000 * (retryCount + 1));
 			} else {
-				this.handleImageError(imageDiv, '加载失败');
-				this.loadedImages++;
-				this.updateProgressBar();
+				this.handleImageLoadFailure(imageDiv, t('loadingFailed'));
 				reject(error);
 			}
 		}
@@ -1517,23 +1488,22 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 		if (retryCount < MAX_RETRIES) {
 			log.debug(() => `Retrying after error (${retryCount + 1}/${MAX_RETRIES})`);
-			setTimeout(() => {
+			window.setTimeout(() => {
 				const img = imageDiv.querySelector('img');
-				const loadingText = imageDiv.querySelector('.loading-text');
+				const loadingText = imageDiv.querySelector('.nig-loading-text');
 				if (img && loadingText) {
 					const imgSrc = img.src;
 					void this.loadWeiboImage(imgSrc, img, imageDiv, loadingText as HTMLElement, retryCount + 1);
 				}
 			}, 1000 * (retryCount + 1));
 		} else {
-			this.handleImageError(imageDiv, '加载失败');
-			this.loadedImages++;
+			this.handleImageLoadFailure(imageDiv, t('loadingFailed'));
 		}
 	}
 
 	private updateProgressBar() {
 		const progressEl = this.contentEl.querySelector('progress');
-		const progressText = this.contentEl.querySelector('.progress-text');
+		const progressText = this.contentEl.querySelector('.nig-progress-text');
 		if (progressEl) {
 			progressEl.setAttribute('value', this.loadedImages.toString());
 
@@ -1542,10 +1512,10 @@ export class CurrentNoteImageGalleryService extends Modal {
 			}
 
 			if (this.loadedImages >= this.totalImages) {
-				setTimeout(() => {
-					const container = this.contentEl.querySelector('.progress-container');
+				window.setTimeout(() => {
+					const container = this.contentEl.querySelector('.nig-progress-container');
 					if (container) {
-						container.addClass('complete');
+						container.addClass('nig-complete');
 					}
 				}, 800);
 			}
@@ -1554,8 +1524,14 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 	private handleImageError(imageDiv: HTMLElement, message: string) {
 		imageDiv.empty();
-		imageDiv.addClass('error');
+		imageDiv.addClass('nig-error');
 		imageDiv.setText(message);
+	}
+
+	private handleImageLoadFailure(imageDiv: HTMLElement, message: string) {
+		this.handleImageError(imageDiv, message);
+		this.loadedImages++;
+		this.updateProgressBar();
 	}
 
 	private getLinkPath(link: string): string | null {
@@ -1568,7 +1544,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 				// 尝试作为直接文件路径
 				const directFile = this.app.vault.getAbstractFileByPath(cleanLink);
 				if (directFile instanceof TFile) {
-					log.debug(() => `找到直接文件路径: ${cleanLink}`);
+					log.debug(() => `Found direct file path: ${cleanLink}`);
 					return directFile.path;
 				}
 
@@ -1579,7 +1555,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 				// 尝试解析为链接路径
 				const dest = this.app.metadataCache.getFirstLinkpathDest(cleanLink, sourcePath);
 				if (dest instanceof TFile) {
-					log.debug(() => `解析为链接路径: ${dest.path}`);
+					log.debug(() => `Resolved as link path: ${dest.path}`);
 					return dest.path;
 				}
 
@@ -1588,7 +1564,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 					const allFiles = this.app.vault.getFiles();
 					const matchedFiles = allFiles.filter(f => f.name === cleanLink);
 					if (matchedFiles.length > 0) {
-						log.debug(() => `通过文件名找到: ${matchedFiles[0].path}`);
+						log.debug(() => `Found by filename: ${matchedFiles[0].path}`);
 						return matchedFiles[0].path;
 					}
 				}
@@ -1598,7 +1574,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 					const resourcePath = `_resources/${cleanLink}`;
 					const resourceFile = this.app.vault.getAbstractFileByPath(resourcePath);
 					if (resourceFile instanceof TFile) {
-						log.debug(() => `找到资源文件: ${resourcePath}`);
+						log.debug(() => `Found resource file: ${resourcePath}`);
 						return resourceFile.path;
 					}
 				}
@@ -1617,7 +1593,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 			const file = this.app.metadataCache.getFirstLinkpathDest(path, sourcePath);
 			if (file instanceof TFile) {
-				log.debug(() => `Wiki链接解析为: ${file.path}`);
+				log.debug(() => `Wiki link resolved to: ${file.path}`);
 				return file.path;
 			}
 
@@ -1633,8 +1609,8 @@ export class CurrentNoteImageGalleryService extends Modal {
 	}
 
 	private async copyImageToClipboard(img: HTMLImageElement) {
+		const canvas = document.createElement('canvas');
 		try {
-			const canvas = document.createElement('canvas');
 			canvas.width = img.naturalWidth;
 			canvas.height = img.naturalHeight;
 
@@ -1679,6 +1655,10 @@ export class CurrentNoteImageGalleryService extends Modal {
 		} catch (err) {
 			log.error(() => 'Copy failed:', err instanceof Error ? err : undefined);
 			new Notice(t('copyFailed'));
+		} finally {
+			// Release canvas memory
+			canvas.width = 0;
+			canvas.height = 0;
 		}
 	}
 
@@ -1724,26 +1704,24 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 			new Notice(t('downloadingImage'));
 		} catch (error) {
-			log.error(() => '下载失败:', error instanceof Error ? error : undefined);
+			log.error(() => 'Download failed:', error instanceof Error ? error : undefined);
 			new Notice(t('downloadFailed'));
 		}
 	}
 
 	private createContextMenu(e: MouseEvent, img: HTMLImageElement) {
 		const menu = document.createElement('div');
-		menu.addClass('image-context-menu');
-		setCssProps(menu, { position: "fixed" });
-		setCssProps(menu, { left: e.pageX + "px" });
-		setCssProps(menu, { top: e.pageY + "px" });
+		menu.addClass('nig-context-menu');
+		menu.setCssStyles({ position: "fixed", left: e.pageX + "px", top: e.pageY + "px" });
 
-		const copyOption = menu.createDiv('menu-item');
+		const copyOption = menu.createDiv('nig-menu-item');
 		copyOption.setText(t('copyImage'));
 		copyOption.onclick = async () => {
 			await this.copyImageToClipboard(img);
 			menu.remove();
 		};
 
-		const downloadOption = menu.createDiv('menu-item');
+		const downloadOption = menu.createDiv('nig-menu-item');
 		downloadOption.setText(t('downloadImage'));
 		downloadOption.onclick = () => {
 			this.downloadImage(img);
@@ -1764,13 +1742,13 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 	private createLightboxWithNavigation(initialIndex: number) {
 		const lightbox = document.createElement('div');
-		lightbox.addClass('lightbox-overlay');
+		lightbox.addClass('nig-lightbox-overlay');
 
 		// 创建图片容器
-		const imgContainer = lightbox.createDiv('lightbox-image-container');
+		const imgContainer = lightbox.createDiv('nig-lightbox-image-container');
 		const img = imgContainer.createEl('img');
 
-		const loadingText = lightbox.createDiv('loading-text');
+		const loadingText = lightbox.createDiv('nig-loading-text');
 		loadingText.setText(t('loading'));
 
 		// 追踪当前图片索引的变量
@@ -1781,15 +1759,15 @@ export class CurrentNoteImageGalleryService extends Modal {
 		// 添加缩放功能
 		const zoomImage = (scale: number) => {
 			if (!isZoomed && scale > 1) {
-				setCssProps(img, { transform: `scale(${scale})` });
+				img.setCssStyles({ transform: `scale(${scale})` });
 				isZoomed = true;
 				initialScale = scale;
 			} else if (isZoomed && scale === 1) {
-				setCssProps(img, { transform: 'scale(1)' });
+				img.setCssStyles({ transform: 'scale(1)' });
 				isZoomed = false;
 			} else if (isZoomed) {
 				// 已缩放状态下的额外缩放
-				setCssProps(img, { transform: `scale(${initialScale * scale})` });
+				img.setCssStyles({ transform: `scale(${initialScale * scale})` });
 			}
 		};
 
@@ -1821,12 +1799,12 @@ export class CurrentNoteImageGalleryService extends Modal {
 			currentIndex = (newIndex + this.images.length) % this.images.length;
 
 			// 显示加载提示
-			setCssProps(loadingText, { display: 'block' });
+			loadingText.setCssStyles({ display: 'block' });
 			loadingText.setText(t('loading'));
 
 			// 重置缩放状态
 			isZoomed = false;
-			setCssProps(img, { transform: 'scale(1)' });
+			img.setCssStyles({ transform: 'scale(1)' });
 
 			// 更新图片
 			const imagePath = this.images[currentIndex];
@@ -1834,13 +1812,13 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 			// 先设置加载完成和错误的回调，再设置 src
 			img.onload = () => {
-				setCssProps(loadingText, { display: 'none' });
+				loadingText.setCssStyles({ display: 'none' });
 			};
 
 			img.onerror = () => {
-				setCssProps(loadingText, { display: 'none' });
+				loadingText.setCssStyles({ display: 'none' });
 				loadingText.setText(t('loadingFailed'));
-				setTimeout(() => {
+				window.setTimeout(() => {
 					loadingText.setText(t('loading'));
 				}, 2000);
 			};
@@ -1856,11 +1834,11 @@ export class CurrentNoteImageGalleryService extends Modal {
 					if (this.plugin.settings.enableCache) {
 						const cachedImage = await this.plugin.imageCacheService.getCachedImage(imagePath);
 						if (cachedImage) {
-							log.debug(() => `Lightbox: 从缓存加载网络图片 ${imagePath}`);
+							log.debug(() => `Lightbox: loading network image from cache ${imagePath}`);
 							loadingText.setText(t('loadingFromCache'));
 							img.src = cachedImage.data;
 						} else {
-							log.debug(() => `Lightbox: 缓存未命中，触发图片加载 ${imagePath}`);
+							log.debug(() => `Lightbox: cache miss, triggering image load ${imagePath}`);
 							// 缓存未命中，触发图片墙中的加载
 							this.queueImageLoad(imagePath, true);
 							// 等待一小段时间看是否能获取到 objectUrl
@@ -1887,7 +1865,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 						}
 					}
 				} catch (error) {
-					log.error(() => `Lightbox: 加载网络图片失败 ${imagePath}`, error instanceof Error ? error : undefined);
+					log.error(() => `Lightbox: failed to load network image ${imagePath}`, error instanceof Error ? error : undefined);
 					// 失败时尝试直接加载
 					img.crossOrigin = 'anonymous';
 					img.src = imagePath;
@@ -1902,11 +1880,11 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 			// 检查图片是否已经加载完成（处理缓存情况）
 			if (img.complete && img.naturalHeight !== 0) {
-				setCssProps(loadingText, { display: 'none' });
+				loadingText.setCssStyles({ display: 'none' });
 			}
 
 			// 更新计数器
-			const counter = lightbox.querySelector('.lightbox-counter');
+			const counter = lightbox.querySelector('.nig-lightbox-counter');
 			if (counter) {
 				counter.setText(`${currentIndex + 1} / ${this.images.length}`);
 			}
@@ -1920,14 +1898,14 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 		// 添加左右导航按钮
 		if (this.images.length > 1) {
-			const prevBtn = lightbox.createDiv('lightbox-nav prev');
+			const prevBtn = lightbox.createDiv('nig-lightbox-nav prev');
 			prevBtn.setText('‹'); // 左箭头
 			prevBtn.onclick = (e) => {
 				e.stopPropagation();
 				void navigateImage(currentIndex - 1);
 			};
 
-			const nextBtn = lightbox.createDiv('lightbox-nav next');
+			const nextBtn = lightbox.createDiv('nig-lightbox-nav next');
 			nextBtn.setText('›'); // 右箭头
 			nextBtn.onclick = (e) => {
 				e.stopPropagation();
@@ -1936,20 +1914,20 @@ export class CurrentNoteImageGalleryService extends Modal {
 		}
 
 		// 显示图片计数
-		const counter = lightbox.createDiv('lightbox-counter');
+		const counter = lightbox.createDiv('nig-lightbox-counter');
 		counter.setText(`${currentIndex + 1} / ${this.images.length}`);
 
 		// 添加缩放控制按钮
-		const controls = lightbox.createDiv('lightbox-controls');
+		const controls = lightbox.createDiv('nig-lightbox-controls');
 
-		const zoomOutBtn = controls.createDiv('zoom-button zoom-out');
+		const zoomOutBtn = controls.createDiv('nig-zoom-button nig-zoom-out');
 		zoomOutBtn.setText('−');
 		zoomOutBtn.onclick = (e) => {
 			e.stopPropagation();
 			zoomImage(1); // 重置缩放
 		};
 
-		const zoomInBtn = controls.createDiv('zoom-button zoom-in');
+		const zoomInBtn = controls.createDiv('nig-zoom-button nig-zoom-in');
 		zoomInBtn.setText('+');
 		zoomInBtn.onclick = (e) => {
 			e.stopPropagation();
@@ -1957,7 +1935,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 		};
 
 		// 添加关闭按钮
-		const closeBtn = lightbox.createDiv('lightbox-close');
+		const closeBtn = lightbox.createDiv('nig-lightbox-close');
 		closeBtn.setText('×');
 		closeBtn.onclick = () => lightbox.remove();
 
@@ -2023,7 +2001,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 				}
 
 				// 继续等待
-				setTimeout(checkLoad, checkInterval);
+				window.setTimeout(checkLoad, checkInterval);
 			};
 
 			checkLoad();
@@ -2063,7 +2041,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 					request.electronRequest.abort();
 				}
 			} catch (e) {
-				log.error(() => '中止请求时出错:', e instanceof Error ? e : undefined);
+				log.error(() => 'Error aborting request:', e instanceof Error ? e : undefined);
 			}
 		});
 		this.currentRequests.clear();
@@ -2085,11 +2063,8 @@ export class CurrentNoteImageGalleryService extends Modal {
 		// 清理虚拟滚动相关事件监听器
 		this.cleanupVirtualScroll();
 
-		// 清理排序防抖定时器
-		if (this.sortDebounceTimer !== null) {
-			clearTimeout(this.sortDebounceTimer);
-			this.sortDebounceTimer = null;
-		}
+		// 清理排序防抖
+		this.debouncedSort.cancel();
 
 		// 重置状态
 		this.loadedImages = 0;

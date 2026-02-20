@@ -53,7 +53,7 @@ export class ObsidianImageLoader {
 
 			return false;
 		} catch (error) {
-			log.error(() => `通过Obsidian API加载本地图片失败: ${imagePath}`, error instanceof Error ? error : undefined);
+			log.error(() => `Failed to load local image via Obsidian API: ${imagePath}`, error instanceof Error ? error : undefined);
 			return false;
 		}
 	}
@@ -103,8 +103,8 @@ export class ObsidianImageLoader {
 
 			return [...new Set(result)];
 		} catch (error) {
-			log.error(() => `生成替代路径时出错:`, error instanceof Error ? error : undefined);
-			return [originalPath]; // 出错时返回原始路径
+			log.error(() => `Error generating alternative paths:`, error instanceof Error ? error : undefined);
+			return [originalPath]; // return original path on error
 		}
 	}
 
@@ -158,7 +158,7 @@ export class ObsidianImageLoader {
 			img.src = objectUrl;
 
 			try {
-				log.debug(() => `尝试缓存网络图片: ${imageUrl}, 内容类型: ${contentType}`);
+				log.debug(() => `Caching network image: ${imageUrl}, content-type: ${contentType}`);
 
 				await this.plugin.imageCacheService.cacheImage(
 					imageUrl,
@@ -167,12 +167,12 @@ export class ObsidianImageLoader {
 					contentType
 				);
 			} catch (error) {
-				log.error(() => `缓存图片失败: ${imageUrl}`, error instanceof Error ? error : undefined);
+				log.error(() => `Failed to cache image: ${imageUrl}`, error instanceof Error ? error : undefined);
 			}
 
 			return true;
 		} catch (error) {
-			log.error(() => `通过Obsidian API加载网络图片失败: ${imageUrl}`, error instanceof Error ? error : undefined);
+			log.error(() => `Failed to load network image via Obsidian API: ${imageUrl}`, error instanceof Error ? error : undefined);
 			return false;
 		}
 	}

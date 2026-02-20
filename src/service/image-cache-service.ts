@@ -1,4 +1,4 @@
-import {App} from 'obsidian';
+import {App, Plugin} from 'obsidian';
 import {log} from "../utils/log-utils";
 
 interface CachedImage {
@@ -21,6 +21,7 @@ interface CacheIndex {
 
 export class ImageCacheService {
 	private app: App;
+	private pluginDir: string;
 	private maxCacheAge = 7 * 24 * 60 * 60 * 1000;  // 7天缓存过期时间
 	private maxCacheSize = 100 * 1024 * 1024;  // 100MB最大缓存大小
 	private cacheIndex: CacheIndex = {};
@@ -30,15 +31,16 @@ export class ImageCacheService {
 	private debounceSaveTimeout: number | null = null;
 
 	private get cacheDir(): string {
-		return `${this.app.vault.configDir}/plugins/note-image-gallery/cache`;
+		return `${this.pluginDir}/cache`;
 	}
 
 	private get indexFile(): string {
-		return `${this.app.vault.configDir}/plugins/note-image-gallery/cache/index.json`;
+		return `${this.pluginDir}/cache/index.json`;
 	}
 
-	constructor(app: App) {
+	constructor(app: App, plugin: Plugin) {
 		this.app = app;
+		this.pluginDir = plugin.manifest.dir!;
 		void this.loadCacheIndex();
 	}
 
@@ -49,28 +51,21 @@ export class ImageCacheService {
 		try {
 			const adapter = this.app.vault.adapter;
 
-			// 检查并创建插件目录
-			const pluginDir = `${this.app.vault.configDir}/plugins/note-image-gallery`;
-			if (!(await adapter.exists(pluginDir))) {
-				log.debug(() => `创建插件目录: ${pluginDir}`);
-				await adapter.mkdir(pluginDir);
-			}
-
 			// 检查并创建缓存目录
 			if (!(await adapter.exists(this.cacheDir))) {
-				log.debug(() => `创建缓存目录: ${this.cacheDir}`);
+				log.debug(() => `Creating cache directory: ${this.cacheDir}`);
 				await adapter.mkdir(this.cacheDir);
 			}
 
 			// 验证目录是否已创建成功
 			if (!(await adapter.exists(this.cacheDir))) {
-				throw new Error(`无法验证缓存目录是否创建成功: ${this.cacheDir}`);
+				throw new Error(`Failed to verify cache directory was created: ${this.cacheDir}`);
 			}
 
-			log.debug(() => `缓存目录已确认: ${this.cacheDir}`);
+			log.debug(() => `Cache directory confirmed: ${this.cacheDir}`);
 			return true;
 		} catch (error) {
-			log.error(() => `确保缓存目录存在时出错:`, error instanceof Error ? error : undefined);
+			log.error(() => `Error ensuring cache directory exists:`, error instanceof Error ? error : undefined);
 			throw error; // 重新抛出错误以便调用者知道操作失败
 		}
 	}
@@ -80,9 +75,9 @@ export class ImageCacheService {
 			await this.ensureCacheDir();
 			await this.loadCacheIndex();
 			await this.cleanupOrphanedFiles();
-			log.debug(() => `缓存服务初始化完成，总大小: ${Math.round(this.totalCacheSize / 1024 / 1024)}MB`);
+			log.debug(() => `Cache service initialized, total size: ${Math.round(this.totalCacheSize / 1024 / 1024)}MB`);
 		} catch (error) {
-			log.error(() => `缓存服务初始化失败:`, error instanceof Error ? error : undefined);
+			log.error(() => `Cache service initialization failed:`, error instanceof Error ? error : undefined);
 			// 确保基本的缓存功能可用
 			this.cacheIndex = {};
 			this.totalCacheSize = 0;
@@ -109,7 +104,7 @@ export class ImageCacheService {
 					this.totalCacheSize += entry.size;
 				});
 
-				log.debug(() => `已加载缓存索引，共 ${Object.keys(this.cacheIndex).length} 项，总大小 ${Math.round(this.totalCacheSize / 1024 / 1024)}MB`);
+				log.debug(() => `Cache index loaded, ${Object.keys(this.cacheIndex).length} entries, total size ${Math.round(this.totalCacheSize / 1024 / 1024)}MB`);
 
 				// 检查缓存文件是否实际存在
 				await this.validateCacheFiles();
@@ -117,7 +112,7 @@ export class ImageCacheService {
 				// 加载后清理过期缓存
 				await this.cleanCache();
 			} catch (e) {
-				log.error(() => `加载缓存索引失败:`, e instanceof Error ? e : undefined);
+				log.error(() => `Failed to load cache index:`, e instanceof Error ? e : undefined);
 				this.cacheIndex = {};
 				this.totalCacheSize = 0;
 			}
@@ -143,7 +138,7 @@ export class ImageCacheService {
 			if (!exists) {
 				invalidUrls.push(url);
 				this.totalCacheSize -= entry.size;
-				log.debug(() => `缓存文件不存在，从索引中移除: ${url}`);
+				log.debug(() => `Cache file missing, removing from index: ${url}`);
 			}
 		}
 
@@ -153,7 +148,7 @@ export class ImageCacheService {
 		});
 
 		if (invalidUrls.length > 0) {
-			log.debug(() => `移除了 ${invalidUrls.length} 个无效的缓存项`);
+			log.debug(() => `Removed ${invalidUrls.length} invalid cache entries`);
 			await this.saveCacheIndex();
 		}
 	}
@@ -163,7 +158,7 @@ export class ImageCacheService {
 	 */
 	public async saveCacheIndex() {
 		if (this._isSaving) {
-			log.debug(() => `缓存索引正在保存中，跳过重复调用`);
+			log.debug(() => `Cache index save already in progress, skipping`);
 			return;
 		}
 
@@ -171,7 +166,7 @@ export class ImageCacheService {
 		let retries = 0;
 		const maxRetries = 3;
 
-		log.debug(() => `开始保存缓存索引，条目数: ${Object.keys(this.cacheIndex).length}`);
+		log.debug(() => `Saving cache index, entries: ${Object.keys(this.cacheIndex).length}`);
 
 		while (retries < maxRetries) {
 			try {
@@ -179,27 +174,27 @@ export class ImageCacheService {
 				await this.ensureCacheDir();
 
 				// 准备JSON数据
-				const jsonData = JSON.stringify(this.cacheIndex, null, 2); // 使用格式化的JSON便于检查
+				const jsonData = JSON.stringify(this.cacheIndex);
 
 				// 写入文件
 				const adapter = this.app.vault.adapter;
 				await adapter.write(this.indexFile, jsonData);
 
-				log.debug(() => `缓存索引保存成功，大小: ${Math.round(jsonData.length / 1024)}KB`);
+				log.debug(() => `Cache index saved, size: ${Math.round(jsonData.length / 1024)}KB`);
 				break;
 			} catch (e) {
 				retries++;
-				log.error(() => `保存缓存索引失败 (尝试 ${retries}/${maxRetries}):`, e instanceof Error ? e : undefined);
+				log.error(() => `Failed to save cache index (attempt ${retries}/${maxRetries}):`, e instanceof Error ? e : undefined);
 
 				if (retries >= maxRetries) {
-					log.error(() => `达到最大重试次数，无法保存缓存索引`);
+					log.error(() => `Max retries reached, unable to save cache index`);
 					break;
 				}
 
 				// 等待短暂时间后重试
 				const delay = 500 * retries;
-				log.debug(() => `${delay}ms后重试保存缓存索引`);
-				await new Promise(resolve => setTimeout(resolve, delay));
+				log.debug(() => `Retrying cache index save in ${delay}ms`);
+				await new Promise(resolve => window.setTimeout(resolve, delay));
 			}
 		}
 
@@ -210,23 +205,23 @@ export class ImageCacheService {
 	 * 将图片添加到缓存
 	 */
 	async cacheImage(url: string, data: ArrayBuffer, etag?: string, mimeType?: string): Promise<string> {
-		log.debug(() => `请求缓存图片: ${url}, 大小: ${Math.round(data.byteLength / 1024)}KB, 类型: ${mimeType || '未知'}`);
+		log.debug(() => `Caching image: ${url}, size: ${Math.round(data.byteLength / 1024)}KB, type: ${mimeType || 'unknown'}`);
 
 		if (!data || data.byteLength === 0) {
-			log.error(() => `跳过缓存图片 ${url}: 数据无效或为空`);
+			log.error(() => `Skipping cache for ${url}: invalid or empty data`);
 			return this.arrayBufferToBase64(data);
 		}
 
 		// 检查是否应该缓存此图片
 		if (!this.shouldCacheImage(url, mimeType)) {
-			log.debug(() => `跳过缓存图片 ${url}: 缓存条件不满足`);
+			log.debug(() => `Skipping cache for ${url}: cache conditions not met`);
 			return await this.arrayBufferToBase64(data);
 		}
 
 		// 检查数据大小，过大的图片不缓存
 		const MAX_SINGLE_IMAGE_SIZE = 20 * 1024 * 1024; // 20MB单图片上限
 		if (data.byteLength > MAX_SINGLE_IMAGE_SIZE) {
-			log.debug(() => `跳过缓存图片 ${url}: 图片过大 (${Math.round(data.byteLength / 1024)}KB)`);
+			log.debug(() => `Skipping cache for ${url}: image too large (${Math.round(data.byteLength / 1024)}KB)`);
 			return await this.arrayBufferToBase64(data);
 		}
 
@@ -237,14 +232,14 @@ export class ImageCacheService {
 			// 确保缓存目录存在
 			const dirExists = await this.ensureCacheDir();
 			if (!dirExists) {
-				throw new Error("无法确保缓存目录存在");
+				throw new Error("Failed to ensure cache directory exists");
 			}
 
 			// 生成文件名
 			const filename = this.generateFilename(url);
 			const filePath = `${this.cacheDir}/${filename}`;
 
-			log.debug(() => `写入缓存文件: ${filePath}, 大小: ${Math.round(data.byteLength / 1024)}KB`);
+			log.debug(() => `Writing cache file: ${filePath}, size: ${Math.round(data.byteLength / 1024)}KB`);
 
 			const dataArray = new Uint8Array(data);
 
@@ -253,7 +248,7 @@ export class ImageCacheService {
 
 			const fileExists = await this.app.vault.adapter.exists(filePath);
 			if (!fileExists) {
-				throw new Error(`缓存文件写入后验证失败: ${filePath}`);
+				throw new Error(`Cache file verification failed after write: ${filePath}`);
 			}
 
 			// 文件写入成功后再更新索引
@@ -274,9 +269,9 @@ export class ImageCacheService {
 			// 保存索引
 			this.debouncedSaveCacheIndex(5000);  // 使用已有的防抖方法，5秒后保存
 
-			log.debug(() => `成功缓存图片: ${url}, 总缓存大小: ${Math.round(this.totalCacheSize / 1024 / 1024)}MB`);
+			log.debug(() => `Image cached: ${url}, total cache size: ${Math.round(this.totalCacheSize / 1024 / 1024)}MB`);
 		} catch (error) {
-			log.error(() => `缓存图片 ${url} 失败:`, error instanceof Error ? error : undefined);
+			log.error(() => `Failed to cache image ${url}:`, error instanceof Error ? error : undefined);
 		}
 
 		return base64Data;
@@ -286,43 +281,43 @@ export class ImageCacheService {
 	 * 从缓存中获取图片
 	 */
 	async getCachedImage(url: string): Promise<CachedImage | null> {
-		log.debug(() => `检查缓存: ${url}`);
+		log.debug(() => `Checking cache: ${url}`);
 
 		// 首先检查缓存是否启用
 		if (!this.shouldUseCache()) {
-			log.debug(() => `缓存未启用，跳过检查: ${url}`);
+			log.debug(() => `Cache disabled, skipping check: ${url}`);
 			return null;
 		}
 
 		const cacheEntry = this.cacheIndex[url];
 
 		if (!cacheEntry) {
-			log.debug(() => `缓存未命中: ${url}`);
+			log.debug(() => `Cache miss: ${url}`);
 			return null;
 		}
 
 		// 检查缓存是否过期
 		if (Date.now() - cacheEntry.timestamp > this.maxCacheAge) {
-			log.debug(() => `缓存已过期: ${url}, 时间: ${new Date(cacheEntry.timestamp).toLocaleString()}`);
+			log.debug(() => `Cache expired: ${url}, time: ${new Date(cacheEntry.timestamp).toLocaleString()}`);
 			await this.removeCacheEntry(url);
 			return null;
 		}
 
 		try {
 			const filePath = `${this.cacheDir}/${cacheEntry.filename}`;
-			log.debug(() => `读取缓存文件: ${filePath}`);
+			log.debug(() => `Reading cache file: ${filePath}`);
 
 			// 检查文件是否存在
 			const exists = await this.app.vault.adapter.exists(filePath);
 			if (!exists) {
-				log.warn(() => `缓存索引存在但文件不存在: ${filePath}`);
+				log.warn(() => `Cache index entry exists but file missing: ${filePath}`);
 				await this.removeCacheEntry(url);
 				return null;
 			}
 
 			// 读取缓存文件
 			const arrayBuffer = await this.app.vault.adapter.readBinary(filePath);
-			log.debug(() => `读取缓存成功: ${url}, 大小: ${Math.round(arrayBuffer.byteLength / 1024)}KB`);
+			log.debug(() => `Cache read success: ${url}, size: ${Math.round(arrayBuffer.byteLength / 1024)}KB`);
 
 			const base64Data = await this.arrayBufferToBase64(arrayBuffer);
 
@@ -339,7 +334,7 @@ export class ImageCacheService {
 				etag: cacheEntry.etag
 			};
 		} catch (e) {
-			log.error(() => `读取缓存图片 ${url} 失败:`, e instanceof Error ? e : undefined);
+			log.error(() => `Failed to read cached image ${url}:`, e instanceof Error ? e : undefined);
 			await this.removeCacheEntry(url);
 			return null;
 		}
@@ -348,12 +343,12 @@ export class ImageCacheService {
 	// 添加防抖保存索引方法
 	private debouncedSaveCacheIndex(delay = 2000): void {
 		if (this.debounceSaveTimeout) {
-			clearTimeout(this.debounceSaveTimeout);
+			window.clearTimeout(this.debounceSaveTimeout);
 		}
 
 		this.debounceSaveTimeout = window.setTimeout(() => {
 			this.saveCacheIndex().catch((e: unknown) => {
-				log.error(() => `延迟保存缓存索引失败:`, e instanceof Error ? e : undefined);
+				log.error(() => `Deferred cache index save failed:`, e instanceof Error ? e : undefined);
 			});
 			this.debounceSaveTimeout = null;
 		}, delay);
@@ -364,7 +359,7 @@ export class ImageCacheService {
 	 */
 	cleanup(): void {
 		if (this.debounceSaveTimeout) {
-			clearTimeout(this.debounceSaveTimeout);
+			window.clearTimeout(this.debounceSaveTimeout);
 			this.debounceSaveTimeout = null;
 		}
 	}
@@ -427,13 +422,13 @@ export class ImageCacheService {
 
 			// 计算需要释放的空间
 			let spaceToFree = this.totalCacheSize - (this.maxCacheSize * 0.8); // 释放到80%
-			log.debug(() => `缓存超过限制，需要释放 ${Math.round(spaceToFree / 1024 / 1024)}MB 空间, 根据优先级`);
+			log.debug(() => `Cache over limit, need to free ${Math.round(spaceToFree / 1024 / 1024)}MB based on priority`);
 
 			// 从低分开始删除，直到释放足够空间
 			for (const entry of validEntries) {
 				if (spaceToFree <= 0) break;
 
-				log.debug(() => `删除低优先级缓存: ${entry.url}, 分数: ${entry['score']}, 大小: ${Math.round(entry.size / 1024)}KB`);
+				log.debug(() => `Removing low-priority cache: ${entry.url}, score: ${entry['score']}, size: ${Math.round(entry.size / 1024)}KB`);
 				await this.removeCacheEntry(entry.url);
 
 				freedSpace += entry.size;
@@ -443,7 +438,7 @@ export class ImageCacheService {
 		}
 
 		if (removedCount > 0) {
-			log.debug(() => `缓存清理完成: 删除了 ${removedCount} 项，释放了 ${Math.round(freedSpace / 1024 / 1024)}MB 空间`);
+			log.debug(() => `Cache cleanup done: removed ${removedCount} entries, freed ${Math.round(freedSpace / 1024 / 1024)}MB`);
 			await this.saveCacheIndex();
 		}
 	}
@@ -470,7 +465,7 @@ export class ImageCacheService {
 			// 从索引中删除
 			delete this.cacheIndex[url];
 		} catch (e) {
-			log.error(() => `移除缓存项 ${url} 失败:`, e instanceof Error ? e : undefined);
+			log.error(() => `Failed to remove cache entry ${url}:`, e instanceof Error ? e : undefined);
 		}
 	}
 
@@ -492,13 +487,13 @@ export class ImageCacheService {
 	 * 计算字符串的哈希值
 	 */
 	private hashString(str: string): string {
-		let hash = 0;
+		// FNV-1a 32-bit: better distribution than djb2, fewer collisions for URL-like strings
+		let hash = 2166136261;
 		for (let i = 0; i < str.length; i++) {
-			const char = str.charCodeAt(i);
-			hash = ((hash << 5) - hash) + char;
-			hash = hash & hash; // 转换为32位整数
+			hash ^= str.charCodeAt(i);
+			hash = (hash * 16777619) >>> 0; // keep 32-bit unsigned
 		}
-		return Math.abs(hash).toString(16);
+		return hash.toString(16);
 	}
 
 	/**
@@ -606,11 +601,11 @@ export class ImageCacheService {
 		if (this.shouldUseCacheCallback) {
 			const enabled = this.shouldUseCacheCallback();
 			if (!enabled) {
-				log.debug(() => `缓存已禁用（通过回调函数）`);
+				log.debug(() => `Cache disabled (via callback)`);
 			}
 			return enabled;
 		}
-		log.debug(() => `缓存已启用（默认值）`);
+		log.debug(() => `Cache enabled (default)`);
 		return true; // 默认启用缓存
 	}
 
@@ -663,9 +658,9 @@ export class ImageCacheService {
 			// 保存空索引
 			await this.saveCacheIndex();
 
-			log.debug(() => `所有缓存已清除`);
+			log.debug(() => `All cache cleared`);
 		} catch (e) {
-			log.error(() => `清除所有缓存失败:`, e instanceof Error ? e : undefined);
+			log.error(() => `Failed to clear all cache:`, e instanceof Error ? e : undefined);
 		}
 	}
 
@@ -702,17 +697,17 @@ export class ImageCacheService {
 				const filePath = `${this.cacheDir}/${filename}`;
 				try {
 					await adapter.remove(filePath);
-					log.debug(() => `已删除孤立的缓存文件: ${filename}`);
+					log.debug(() => `Deleted orphaned cache file: ${filename}`);
 				} catch (e) {
-					log.error(() => `删除孤立的缓存文件失败: ${filename}`, e instanceof Error ? e : undefined);
+					log.error(() => `Failed to delete orphaned cache file: ${filename}`, e instanceof Error ? e : undefined);
 				}
 			}
 
 			if (orphanedFiles.length > 0) {
-				log.debug(() => `共删除了 ${orphanedFiles.length} 个孤立的缓存文件`);
+				log.debug(() => `Deleted ${orphanedFiles.length} orphaned cache files`);
 			}
 		} catch (e) {
-			log.error(() => `清理孤立文件失败:`, e instanceof Error ? e : undefined);
+			log.error(() => `Failed to clean up orphaned files:`, e instanceof Error ? e : undefined);
 		}
 	}
 
@@ -740,7 +735,7 @@ export class ImageCacheService {
 
 			return cacheFiles.map(file => file.name);
 		} catch (e) {
-			log.error(() => `列出缓存目录文件失败:`, e instanceof Error ? e : undefined);
+			log.error(() => `Failed to list cache directory files:`, e instanceof Error ? e : undefined);
 			return [];
 		}
 	}

@@ -23,7 +23,7 @@ export default class NoteImageGalleryPlugin extends Plugin {
 		log.setDebugMode(this.settings.debugMode);
 
 		this.imageExtractorService = new ImageExtractorService();
-		this.imageCacheService = new ImageCacheService(this.app);
+		this.imageCacheService = new ImageCacheService(this.app, this);
 
 		this.imageLoader = new ObsidianImageLoader(this.app, this);
 		await this.imageCacheService.initCache();
@@ -101,7 +101,7 @@ export default class NoteImageGalleryPlugin extends Plugin {
 		if (!(file instanceof TFile) || file.extension !== 'md') {
 			return null;
 		}
-		return await this.app.vault.read(file);
+		return await this.app.vault.cachedRead(file);
 	}
 
 	onunload() {

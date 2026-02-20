@@ -14,7 +14,7 @@ export const translations = {
 		saveCacheIndexFailed: 'Failed to save cache index:',
 
 		// Settings
-		imageGallerySettings: 'Image Gallery Settings',
+		imageGallerySettings: 'Image Gallery settings',
 		enableCache: 'Enable image cache',
 		enableCacheDesc: 'Cache remote images to speed up loading',
 		cacheValidPeriod: 'Cache valid period',
@@ -146,8 +146,10 @@ export const translations = {
 type Locale = keyof typeof translations;
 
 export function getLocale(): Locale {
-	const lang = window.localStorage.getItem('language') || 'en-GB';
-	return (lang in translations ? lang : 'en-GB') as Locale;
+	// Use Obsidian's official i18n API instead of reading from localStorage directly
+	const lang: string = (window as unknown as { i18next?: { language?: string } }).i18next?.language ?? 'en-GB';
+	if (lang && lang.startsWith('zh')) return 'zh';
+	return 'en-GB';
 }
 
 export function t(key: keyof typeof translations["en-GB"], params?: Record<string, string>): string {
