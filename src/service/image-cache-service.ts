@@ -251,6 +251,11 @@ export class ImageCacheService {
 				throw new Error(`Cache file verification failed after write: ${filePath}`);
 			}
 
+			const oldEntry = this.cacheIndex[url];
+			if (oldEntry) {
+				this.totalCacheSize -= oldEntry.size;
+			}
+
 			// 文件写入成功后再更新索引
 			this.cacheIndex[url] = {
 				timestamp: Date.now(),

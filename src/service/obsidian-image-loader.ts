@@ -28,7 +28,9 @@ export class ObsidianImageLoader {
 			if (abstractFile instanceof TFile) {
 				tfile = abstractFile;
 			} else {
-				const linkedFile = this.app.metadataCache.getFirstLinkpathDest(imagePath, '');
+				const activeFile = this.app.workspace.getActiveFile();
+				const sourcePath = activeFile?.path ?? '';
+				const linkedFile = this.app.metadataCache.getFirstLinkpathDest(imagePath, sourcePath);
 				if (linkedFile instanceof TFile) {
 					tfile = linkedFile;
 				}

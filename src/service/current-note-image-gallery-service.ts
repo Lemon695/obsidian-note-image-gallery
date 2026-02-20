@@ -289,14 +289,15 @@ export class CurrentNoteImageGalleryService extends Modal {
 	private updateElementPositions() {
 		const container = this.contentEl.querySelector('.nig-image-wall-container');
 		if (!container) return;
+		const containerRect = container.getBoundingClientRect();
 
 		this.imageDataMap.forEach((data) => {
 			const el = data.element;
 			if (el) {
 				const rect = el.getBoundingClientRect();
 				data.position = {
-					top: rect.top + container.scrollTop,
-					bottom: rect.bottom + container.scrollTop,
+					top: rect.top - containerRect.top + container.scrollTop,
+					bottom: rect.bottom - containerRect.top + container.scrollTop,
 					height: rect.height
 				};
 			}
@@ -489,7 +490,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 			const imagePath = data.path;
 			const isRemote = imagePath.startsWith('http://') || imagePath.startsWith('https://');
 
-			if (filterType === 'all' || (filterType === 'local' && !isRemote) || (filterType === 'remote' && isRemote)) {
+			if (this.checkFilterMatch(filterType, isRemote)) {
 				data.element.setCssStyles({ display: '', visibility: '' });
 			} else {
 				data.element.setCssStyles({ display: 'none' });
@@ -501,13 +502,14 @@ export class CurrentNoteImageGalleryService extends Modal {
 		if (container) {
 			// 更新位置信息
 			window.setTimeout(() => {
+				const containerRect = container.getBoundingClientRect();
 				this.imageDataMap.forEach((data) => {
 					const el = data.element;
 					if (el && window.getComputedStyle(el).display !== 'none') {
 						const rect = el.getBoundingClientRect();
 						data.position = {
-							top: rect.top + container.scrollTop,
-							bottom: rect.bottom + container.scrollTop,
+							top: rect.top - containerRect.top + container.scrollTop,
+							bottom: rect.bottom - containerRect.top + container.scrollTop,
 							height: rect.height
 						};
 					}
@@ -1334,7 +1336,6 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 			if (cachedImage) {
 				log.debug(() => `Loading Weibo image from cache: ${imagePath}`);
-
 				await new Promise<void>((resolve, reject) => {
 					img.onload = () => {
 						this.handleImageLoadSuccess(img, imageDiv, loadingText, imagePath);
@@ -1529,6 +1530,15 @@ export class CurrentNoteImageGalleryService extends Modal {
 	}
 
 	private handleImageLoadFailure(imageDiv: HTMLElement, message: string) {
+		const imagePath = imageDiv.getAttribute('data-path');
+		if (imagePath) {
+			const imageData = this.imageDataMap.get(imagePath);
+			if (imageData) {
+				imageData.hasError = true;
+				imageData.isLoading = false;
+			}
+		}
+
 		this.handleImageError(imageDiv, message);
 		this.loadedImages++;
 		this.updateProgressBar();
@@ -1743,6 +1753,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 	private createLightboxWithNavigation(initialIndex: number) {
 		const lightbox = document.createElement('div');
 		lightbox.addClass('nig-lightbox-overlay');
+		let isLightboxClosed = false;
 
 		// 创建图片容器
 		const imgContainer = lightbox.createDiv('nig-lightbox-image-container');
@@ -1934,23 +1945,6 @@ export class CurrentNoteImageGalleryService extends Modal {
 			zoomImage(isZoomed ? 1.5 : 2);
 		};
 
-		// 添加关闭按钮
-		const closeBtn = lightbox.createDiv('nig-lightbox-close');
-		closeBtn.setText('×');
-		closeBtn.onclick = () => lightbox.remove();
-
-		// 初始图片
-		void navigateImage(currentIndex);
-
-		document.body.appendChild(lightbox);
-
-		// 点击背景关闭
-		lightbox.onclick = (e) => {
-			if (e.target === lightbox) {
-				lightbox.remove();
-			}
-		};
-
 		const handleKeyDown = (e: KeyboardEvent) => {
 			switch (e.key) {
 				case 'ArrowLeft':
@@ -1960,8 +1954,7 @@ export class CurrentNoteImageGalleryService extends Modal {
 					void navigateImage(currentIndex + 1);
 					break;
 				case 'Escape':
-					lightbox.remove();
-					document.removeEventListener('keydown', handleKeyDown);
+					closeLightbox();
 					break;
 				case '+':
 				case '=':
@@ -1972,12 +1965,34 @@ export class CurrentNoteImageGalleryService extends Modal {
 					break;
 			}
 		};
-		document.addEventListener('keydown', handleKeyDown);
 
-		// 添加清理函数
-		lightbox.addEventListener('remove', () => {
+		const closeLightbox = () => {
+			if (isLightboxClosed) {
+				return;
+			}
+			isLightboxClosed = true;
 			document.removeEventListener('keydown', handleKeyDown);
-		});
+			lightbox.remove();
+		};
+
+		// 添加关闭按钮
+		const closeBtn = lightbox.createDiv('nig-lightbox-close');
+		closeBtn.setText('×');
+		closeBtn.onclick = closeLightbox;
+
+		// 初始图片
+		void navigateImage(currentIndex);
+
+		document.body.appendChild(lightbox);
+
+		// 点击背景关闭
+		lightbox.onclick = (e) => {
+			if (e.target === lightbox) {
+				closeLightbox();
+			}
+		};
+
+		document.addEventListener('keydown', handleKeyDown);
 	}
 
 	/**
