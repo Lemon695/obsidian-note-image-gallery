@@ -36,10 +36,6 @@ export class NoteImageGallerySettingTab extends PluginSettingTab {
 		containerEl.empty();
 
 		new Setting(containerEl)
-			.setName(t('imageGallerySettings'))
-			.setHeading();
-
-		new Setting(containerEl)
 			.setName(t('enableCache'))
 			.setDesc(t('enableCacheDesc'))
 			.addToggle(toggle => toggle

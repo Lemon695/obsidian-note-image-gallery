@@ -1,3 +1,5 @@
+import { getLanguage } from 'obsidian';
+
 export const translations = {
 	'en-GB': {
 		// Command names
@@ -14,7 +16,6 @@ export const translations = {
 		saveCacheIndexFailed: 'Failed to save cache index:',
 
 		// Settings
-		imageGallerySettings: 'Image Gallery settings',
 		enableCache: 'Enable image cache',
 		enableCacheDesc: 'Cache remote images to speed up loading',
 		cacheValidPeriod: 'Cache valid period',
@@ -85,7 +86,6 @@ export const translations = {
 		saveCacheIndexFailed: '保存缓存索引失败:',
 
 		// Settings
-		imageGallerySettings: '图片墙设置',
 		enableCache: '启用图片缓存',
 		enableCacheDesc: '启用后，将缓存远程图片以加快加载速度',
 		cacheValidPeriod: '缓存有效期',
@@ -146,8 +146,7 @@ export const translations = {
 type Locale = keyof typeof translations;
 
 export function getLocale(): Locale {
-	// Use Obsidian's official i18n API instead of reading from localStorage directly
-	const lang: string = (window as unknown as { i18next?: { language?: string } }).i18next?.language ?? 'en-GB';
+	const lang: string = getLanguage() ?? 'en-GB';
 	if (lang && lang.startsWith('zh')) return 'zh';
 	return 'en-GB';
 }
