@@ -3,12 +3,12 @@ import { getLanguage } from 'obsidian';
 export const translations = {
 	'en-GB': {
 		// Command names
-		currentFile: 'Current file',
+		currentFile: 'Open gallery for current note',
 		clearImageCache: 'Clear image cache',
 
 		// Main plugin
 		loadingPlugin: 'Loading plugin v',
-		openGallery: 'Open gallery',
+		openGallery: 'Open image gallery',
 		imageCacheCleared: 'Image cache cleared',
 		noImagesFound: 'No images found in current note',
 		errorOpeningGallery: 'Error opening image gallery',
@@ -25,7 +25,7 @@ export const translations = {
 		cacheSizeZeroOrInvalid: 'Cache size is 0 or invalid',
 		getCacheSizeFailed: 'Failed to get cache size:',
 		unableToGetCacheSize: 'Unable to get cache size, please try to reinitialize cache',
-		cacheStatus: 'Cache Status',
+		cacheStatus: 'Cache status',
 		currentCacheSize: 'Current cache size: {size} MB / {maxSize} MB',
 		maxCacheSize: 'Maximum cache size',
 		maxCacheSizeDesc: 'Maximum size for image cache: {size} MB',
@@ -35,7 +35,7 @@ export const translations = {
 		clearCache: 'Clear cache',
 		clearCacheDesc: 'Delete all cached images',
 		clearAllCache: 'Clear all cache',
-		developer: 'Developer',
+		developer: 'Developer tools',
 		debugMode: 'Debug mode',
 		debugModeDesc: 'Enable debug mode to log detailed information to the console.',
 		debugModeStatus: 'Debug mode {status}',
@@ -73,12 +73,12 @@ export const translations = {
 	},
 	'zh': {
 		// Command names
-		currentFile: '当前文件',
+		currentFile: '打开当前笔记图片墙',
 		clearImageCache: '清除图片缓存',
 
 		// Main plugin
 		loadingPlugin: '加载插件 v',
-		openGallery: '打开图片墙',
+		openGallery: '打开图片画廊',
 		imageCacheCleared: '图片缓存已清除',
 		noImagesFound: '当前笔记中未找到图片',
 		errorOpeningGallery: '打开图片墙时出错',
@@ -105,7 +105,7 @@ export const translations = {
 		clearCache: '清除缓存',
 		clearCacheDesc: '删除所有缓存的图片',
 		clearAllCache: '清除全部缓存',
-		developer: '开发者',
+		developer: '开发者工具',
 		debugMode: '调试模式',
 		debugModeDesc: '启用调试模式以在控制台中记录详细信息。',
 		debugModeStatus: '调试模式已{status}',
@@ -161,16 +161,4 @@ export function t(key: keyof typeof translations["en-GB"], params?: Record<strin
 		});
 	}
 	return text;
-}
-
-/**
- * 调试函数：打印当前语言设置
- */
-export function debugLocale(): void {
-	console.debug('=== Locale Debug Info ===');
-	console.debug('Current locale:', getLocale());
-	console.debug('localStorage language:', window.localStorage.getItem('language'));
-	console.debug('navigator.language:', navigator.language);
-	console.debug('moment locale:', (window as unknown as Record<string, unknown>).moment);
-	console.debug('========================');
 }

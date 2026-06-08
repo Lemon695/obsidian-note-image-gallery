@@ -42,14 +42,18 @@ class HybridImageExtractor implements ImageExtractor {
  * 处理格式：![[图片文件名]]
  */
 class WikiImageExtractor implements ImageExtractor {
-	// 修改正则：不匹配后面紧跟 ](  的情况（混合格式）
-	private readonly regex = /!\[\[(.*?)]](?!\()/g;
+	private readonly regex = /!\[\[(.*?)]]/g;
 
 	extract(content: string): string[] {
 		const images: string[] = [];
 		let match;
 
 		while ((match = this.regex.exec(content)) !== null) {
+			const nextChar = content[match.index + match[0].length];
+			if (nextChar === '(') {
+				continue;
+			}
+
 			if (match[1]) {
 				const imagePath = this.cleanImagePath(match[1]);
 				if (imagePath) {
@@ -79,8 +83,7 @@ class WikiImageExtractor implements ImageExtractor {
  * 处理格式：![alt](image.jpg)
  */
 class MarkdownImageExtractor implements ImageExtractor {
-	// 修改正则：不匹配前面是 ]] 的情况（混合格式）
-	private readonly regex = /(?<!]])!\[.*?\]\((.*?)\)/g;
+	private readonly regex = /!\[.*?]\((.*?)\)/g;
 
 	extract(content: string): string[] {
 		const images: string[] = [];
@@ -111,43 +114,6 @@ class MarkdownImageExtractor implements ImageExtractor {
 	}
 }
 
-/**
- * 简单图片链接提取器
- * 处理格式：![](image.jpg)
- */
-class SimpleImageExtractor implements ImageExtractor {
-	private readonly regex = /!\[]\((.*?)\)/g;
-
-	extract(content: string): string[] {
-		const images: string[] = [];
-		let match;
-
-		while ((match = this.regex.exec(content)) !== null) {
-			if (match[1]) {
-				const imagePath = this.processImagePath(match[1]);
-				if (imagePath) {
-					images.push(imagePath);
-				}
-			}
-		}
-
-		return images;
-	}
-
-	private processImagePath(path: string): string {
-		const trimmedPath = path.trim();
-		// 移除路径中的引号（如果存在）
-		const cleanPath = trimmedPath.replace(/['"]/g, '');
-
-		// 过滤掉 markdown 文件
-		if (cleanPath.toLowerCase().endsWith('.md')) {
-			return '';
-		}
-
-		return cleanPath;
-	}
-}
-
 export class ImageExtractorService {
 	private readonly extractors: ImageExtractor[];
 
@@ -157,8 +123,7 @@ export class ImageExtractorService {
 		this.extractors = [
 			new HybridImageExtractor(),
 			new WikiImageExtractor(),
-			new MarkdownImageExtractor(),
-			new SimpleImageExtractor()
+			new MarkdownImageExtractor()
 		];
 	}
 

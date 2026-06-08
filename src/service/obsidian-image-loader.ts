@@ -90,17 +90,6 @@ export class ObsidianImageLoader {
 					result.push(`${activeFile.parent.path}/_attachments/${filename}`);
 					result.push(`${activeFile.parent.path}/attachments/${filename}`);
 				}
-
-				const matchingFiles = this.app.vault.getFiles().filter(f => f.name === filename);
-				for (const file of matchingFiles) {
-					result.push(file.path);
-				}
-			}
-
-			const allFiles = this.app.vault.getFiles();
-			const matchingPathFiles = allFiles.filter(f => f.path.includes(originalPath));
-			for (const file of matchingPathFiles) {
-				result.push(file.path);
 			}
 
 			return [...new Set(result)];

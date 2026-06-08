@@ -84,7 +84,7 @@
 
 There are three ways to open the image gallery:
 
-1. **Command Palette**: Press `Ctrl/Cmd + P` and search for "Open Current Note Image Gallery"
+1. **Command Palette**: Press `Ctrl/Cmd + P` and search for "Open gallery for current note"
 2. **Ribbon Icon**: Click the image gallery icon in the left sidebar
 3. **Hotkey**: Assign a custom hotkey in Settings → Hotkeys
 
@@ -136,6 +136,16 @@ Access plugin settings via Settings → Note Image Gallery
 
 ---
 
+## 🔒 Privacy and disclosures
+
+- **No account required**: The plugin works without signing in to any service.
+- **No telemetry or ads**: The plugin doesn't collect analytics or show advertisements.
+- **Network use**: The plugin may send network requests only when your current note contains remote image URLs and you choose to open the gallery.
+- **External file access**: The plugin reads images referenced by the current note and stores remote-image cache files inside the plugin data directory.
+- **Open source**: The source code is available in this repository.
+
+---
+
 ## 🎯 Performance Tips
 
 1. **Enable Caching**: Keep image caching enabled for faster loading of remote images
@@ -156,6 +166,9 @@ npm install
 # Build for development (with watch mode)
 npm run dev
 
+# Run lint
+npm run lint
+
 # Build for production
 npm run build
 
@@ -169,7 +182,9 @@ npm run build
 obsidian-note-image-gallery/
 ├── src/
 │   ├── main.ts                 # Plugin entry point
-│   ├── settings.ts              # Settings tab and configuration
+│   ├── settings.ts             # Settings tab and configuration
+│   ├── i18n/
+│   │   └── locale.ts           # Internationalization strings
 │   ├── service/
 │   │   ├── current-note-image-gallery-service.ts  # Main gallery service
 │   │   ├── image-cache-service.ts                 # Cache management

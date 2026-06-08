@@ -41,7 +41,6 @@ export class ImageCacheService {
 	constructor(app: App, plugin: Plugin) {
 		this.app = app;
 		this.pluginDir = plugin.manifest.dir!;
-		void this.loadCacheIndex();
 	}
 
 	/**

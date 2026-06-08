@@ -5,17 +5,6 @@ import {RetryHandler} from "../utils/retry-handler";
 import {ResourceManager} from "../utils/resource-manager";
 import {t} from "../i18n/locale";
 
-// 定义Electron请求接口（用于向后兼容）
-interface ElectronRequest {
-	abort(): void;
-}
-
-interface ImageRequest {
-	controller?: AbortController;
-	electronRequest?: ElectronRequest;
-	timestamp: number;
-}
-
 interface ImageData {
 	path: string;
 	element: HTMLElement;
@@ -40,7 +29,6 @@ export class CurrentNoteImageGalleryService extends Modal {
 	private images: string[] = [];
 	private loadedImages = 0;
 	private totalImages = 0;
-	private currentRequests: Map<string, ImageRequest> = new Map();
 	private imageDataMap: Map<string, ImageData> = new Map();
 	private queueImageLoad: (imagePath: string, isVisible?: boolean) => void = () => {
 	};
@@ -69,7 +57,6 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 	onOpen() {
 		this.loadedImages = 0;
-		this.currentRequests.clear();
 		this.imageDataMap.clear();
 
 		const {contentEl} = this;
@@ -519,40 +506,6 @@ export class CurrentNoteImageGalleryService extends Modal {
 				container.dispatchEvent(new Event('scroll'));
 			}, 100); // 增加短暂延迟确保DOM已更新
 		}
-	}
-
-	private createImageElement(imagePath: string, imageWall: HTMLElement) {
-		const imageDiv = imageWall.createDiv('nig-image-item');
-		imageDiv.setAttribute('data-path', imagePath);
-
-		// 存储图片元素引用
-		this.imageDataMap.set(imagePath, {
-			path: imagePath,
-			element: imageDiv,
-			isLoading: false,
-			hasError: false
-		});
-
-		// 监听此元素以实现懒加载
-		this.intersectionObserver?.observe(imageDiv);
-
-		// 添加点击事件用于查看大图
-		imageDiv.addEventListener('click', (e) => {
-			// 阻止事件冒泡，避免与其他插件（如 Image Toolkit）冲突
-			e.stopPropagation();
-			e.preventDefault();
-
-			const currentIndex = this.images.indexOf(imagePath);
-			this.createLightboxWithNavigation(currentIndex);
-		});
-
-		imageDiv.addEventListener('contextmenu', (e) => {
-			e.preventDefault();
-			const img = imageDiv.querySelector('img');
-			if (img) {
-				this.createContextMenu(e, img);
-			}
-		});
 	}
 
 	/**
@@ -1323,185 +1276,6 @@ export class CurrentNoteImageGalleryService extends Modal {
 		}
 	}
 
-	private async loadWeiboImage(
-		imagePath: string,
-		img: HTMLImageElement,
-		imageDiv: HTMLElement,
-		loadingText: HTMLElement,
-		retryCount = 0
-	): Promise<void> {
-		try {
-			// 异步获取缓存
-			const cachedImage = await this.plugin.imageCacheService.getCachedImage(imagePath);
-
-			if (cachedImage) {
-				log.debug(() => `Loading Weibo image from cache: ${imagePath}`);
-				await new Promise<void>((resolve, reject) => {
-					img.onload = () => {
-						this.handleImageLoadSuccess(img, imageDiv, loadingText, imagePath);
-						resolve();
-					};
-
-					img.onerror = (e) => {
-						const error = e instanceof Error ? e : new Error('Cached Weibo image load error');
-						log.error(() => `Cached Weibo image load error`, error);
-						reject(error);
-					};
-
-					// 设置图片源为缓存的base64数据
-					img.src = cachedImage.data;
-				}).catch(async (e) => {
-					await this.loadWeiboImageWithoutCache(imagePath, img, imageDiv, loadingText, retryCount, () => {}, () => {});
-				});
-				return;
-			}
-
-			await this.loadWeiboImageWithoutCache(imagePath, img, imageDiv, loadingText, retryCount, () => {}, () => {});
-		} catch (error) {
-			const currentRequestId = imageDiv.getAttribute('data-request-id');
-			this.handleError(error instanceof Error ? error : new Error(String(error)), imageDiv, currentRequestId || undefined, retryCount);
-			throw error;
-		}
-	}
-
-	private async loadWeiboImageWithoutCache(
-		imagePath: string,
-		img: HTMLImageElement,
-		imageDiv: HTMLElement,
-		loadingText: HTMLElement,
-		retryCount: number,
-		resolve: () => void,
-		reject: (error: unknown) => void
-	): Promise<void> {
-		// 使用 Obsidian 的 requestUrl API 代替 electron.remote
-		const MAX_RETRIES = 3;
-
-		try {
-			log.debug(() => `Loading Weibo image via requestUrl (no cache): ${imagePath}`);
-
-			const response = await requestUrl({
-				url: imagePath,
-				method: 'GET',
-				headers: {
-					'Referer': 'https://weibo.com/',
-					'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-				}
-			});
-
-			if (response.status !== 200) {
-				throw new Error(`HTTP Error: ${response.status}`);
-			}
-
-			const arrayBuffer = response.arrayBuffer;
-			const contentType = response.headers['content-type'] || 'image/jpeg';
-			const blob = new Blob([arrayBuffer], {type: contentType});
-
-			// 使用 ResourceManager 管理 objectURL
-			const objectUrl = this.resourceManager.createObjectURL(imagePath, blob);
-
-			img.onload = () => {
-				if (loadingText && loadingText.parentNode) {
-					loadingText.remove();
-				}
-
-				// 移除占位符
-				const placeholder = imageDiv.querySelector('.nig-image-placeholder');
-				if (placeholder) {
-					placeholder.remove();
-				}
-
-				const ratio = img.naturalHeight / img.naturalWidth;
-				const baseHeight = 10;
-				const heightSpan = Math.min(Math.ceil(ratio * baseHeight), 30);
-
-				imageDiv.setCssStyles({ gridRowEnd: `span ${heightSpan}` });
-				img.setCssStyles({ opacity: '1' });
-				this.loadedImages++;
-				this.updateProgressBar();
-
-				const imageData = this.imageDataMap.get(imagePath);
-				if (imageData) {
-					imageData.isLoading = false;
-				}
-
-				resolve();
-			};
-
-			img.onerror = async () => {
-				if (retryCount < MAX_RETRIES) {
-					log.debug(() => `Retrying Weibo image load (${retryCount + 1}/${MAX_RETRIES}): ${imagePath}`);
-					await this.loadWeiboImage(imagePath, img, imageDiv, loadingText, retryCount + 1);
-					resolve();
-				} else {
-					this.handleImageLoadFailure(imageDiv, t('loadingFailed'));
-					reject(new Error('Max retries reached'));
-				}
-			};
-
-			img.src = objectUrl;
-
-			const imageData = this.imageDataMap.get(imagePath);
-			if (imageData) {
-				imageData.objectUrl = objectUrl;
-			}
-
-			// 尝试缓存图片
-			try {
-				await this.plugin.imageCacheService.cacheImage(
-					imagePath,
-					arrayBuffer,
-					undefined,
-					contentType
-				);
-				log.debug(() => `Weibo image cached: ${imagePath}`);
-			} catch (cacheError) {
-				log.error(() => `Failed to cache Weibo image: ${imagePath}`, cacheError instanceof Error ? cacheError : undefined);
-			}
-		} catch (error) {
-			log.error(() => `requestUrl failed to load Weibo image: ${imagePath}`, error instanceof Error ? error : undefined);
-
-			const imageData = this.imageDataMap.get(imagePath);
-			if (imageData) {
-				imageData.isLoading = false;
-			}
-
-			if (retryCount < MAX_RETRIES) {
-				log.debug(() => `Retrying after request failure (${retryCount + 1}/${MAX_RETRIES}): ${imagePath}`);
-				window.setTimeout(() => {
-					this.loadWeiboImage(imagePath, img, imageDiv, loadingText, retryCount + 1)
-						.then(resolve)
-						.catch(reject);
-				}, 1000 * (retryCount + 1));
-			} else {
-				this.handleImageLoadFailure(imageDiv, t('loadingFailed'));
-				reject(error);
-			}
-		}
-	}
-
-	private handleError(error: Error, imageDiv: HTMLElement, requestId: string | undefined, retryCount: number) {
-		const MAX_RETRIES = 3;
-
-		log.error(() => 'Error loading Weibo image:', error instanceof Error ? error : undefined);
-		if (requestId) {
-			this.currentRequests.delete(requestId);
-		}
-
-		if (retryCount < MAX_RETRIES) {
-			log.debug(() => `Retrying after error (${retryCount + 1}/${MAX_RETRIES})`);
-			window.setTimeout(() => {
-				const img = imageDiv.querySelector('img');
-				const loadingText = imageDiv.querySelector('.nig-loading-text');
-				if (img && loadingText) {
-					const imgSrc = img.src;
-					void this.loadWeiboImage(imgSrc, img, imageDiv, loadingText as HTMLElement, retryCount + 1);
-				}
-			}, 1000 * (retryCount + 1));
-		} else {
-			this.handleImageLoadFailure(imageDiv, t('loadingFailed'));
-		}
-	}
-
 	private updateProgressBar() {
 		const progressEl = this.contentEl.querySelector('progress');
 		const progressText = this.contentEl.querySelector('.nig-progress-text');
@@ -1567,16 +1341,6 @@ export class CurrentNoteImageGalleryService extends Modal {
 				if (dest instanceof TFile) {
 					log.debug(() => `Resolved as link path: ${dest.path}`);
 					return dest.path;
-				}
-
-				// 如果是文件名（没有路径），尝试在库中查找
-				if (!cleanLink.includes('/')) {
-					const allFiles = this.app.vault.getFiles();
-					const matchedFiles = allFiles.filter(f => f.name === cleanLink);
-					if (matchedFiles.length > 0) {
-						log.debug(() => `Found by filename: ${matchedFiles[0].path}`);
-						return matchedFiles[0].path;
-					}
 				}
 
 				// 如果都失败了，尝试添加_resources前缀
@@ -2047,19 +1811,6 @@ export class CurrentNoteImageGalleryService extends Modal {
 
 	onClose() {
 		this.isClosed = true;
-
-		this.currentRequests.forEach((request) => {
-			try {
-				if (request.controller) {
-					request.controller.abort();
-				} else if (request.electronRequest) {
-					request.electronRequest.abort();
-				}
-			} catch (e) {
-				log.error(() => 'Error aborting request:', e instanceof Error ? e : undefined);
-			}
-		});
-		this.currentRequests.clear();
 
 		this.resourceManager.revokeAll();
 		this.imageDataMap.clear();
